@@ -1,0 +1,895 @@
+/* TODO: bolo by vhodne pretriedit srandy, ktore tu su na viackrat */
+
+/* --- GLOBÁLNE STYLY --- */
+:root {
+    /* ... tvoje pôvodné farby ... */
+    --gold: #f0c419;
+    --dark: #1a1a1a;
+    --brown: #2b1d16;
+    --red: #9b1515;
+    --white: #e0e0e0;
+    --green: #4caf50; /* Nová pre voľné */
+    --gray: #555555;  /* Nová pre zatvorené */
+}
+
+body {
+    background-color: var(--dark);
+    color: var(--white);
+    font-family: 'Roboto', sans-serif;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    /* Zväčšenie základného textu pre lepšiu čitateľnosť na mobile */
+    font-size: 16px;
+    line-height: 1.5;
+}
+
+/* --- HEADER --- */
+header {
+    text-align: center;
+    padding: 20px 10px; /* Menšie odsadenie na bokoch pre mobil */
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.logo {
+    max-width: 150px; /* Menšie logo na mobile */
+    height: auto;
+    margin-bottom: 5px;
+}
+
+h1 {
+    color: var(--gold);
+    font-size: 2.2rem; /* Menší nadpis na mobile */
+    margin: 5px 0;
+}
+
+/* --- FORMULÁR --- */
+.booking-container {
+    background: var(--brown);
+    padding: 20px; /* Menší padding vo vnútri boxu pre mobil */
+    border-radius: 8px;
+    border-top: 5px solid var(--red);
+    /* Flexibilná šírka s paddingom */
+    width: calc(100% - 20px);
+    max-width: 400px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    box-sizing: border-box; /* Dôležité pre správne počítanie šírky */
+    margin: 0 10px; /* Vonkajšie odsadenie, aby box nelepil k okrajom displeja */
+}
+
+h2 {
+    text-align: center;
+    color: var(--gold);
+    border-bottom: 1px solid var(--gold);
+    /* padding-bottom: 10px; */
+    margin-top: 0;
+    font-size: 1.5rem; /* Prispôsobenie nadpisu */
+}
+
+.input-group {
+    margin-bottom: 15px; /* Mierne menší rozostup na mobile */
+}
+
+label {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--gold);
+    font-weight: bold;
+    font-size: 0.9rem; /* Mierne menší label */
+}
+
+/* Vylepšenie inputov a selectov pre dotykové ovládanie */
+input, select {
+    width: 100%;
+    padding: 12px; /* Dostatok miesta pre prst */
+    background: #3d2b22;
+    border: 1px solid #555;
+    color: white;
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-size: 1rem; /* Zväčšenie textu v inputoch, aby iPhone nezoomoval */
+    -webkit-appearance: none;
+    min-height: 50px;
+}
+
+/* Riadok pre dátum a čas */
+.datetime-row {
+    display: flex;
+    gap: 10px;
+}
+
+/* --- TLAČIDLO --- */
+.btn-submit {
+    width: 100%;
+    padding: 15px; /* Dostatok miesta pre prst */
+    background: var(--red);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-weight: bold;
+    cursor: pointer;
+    font-size: 1rem;
+    margin-top: 30px;
+    transition: 0.15s;
+    min-height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+}
+
+.btn-submit:hover {
+    background: #a00000;
+}
+
+/* --- SPINNER (NAČÍTAVANIE) --- */
+.spinner {
+    display: none;
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: var(--white);
+    animation: spin-loader 0.8s linear infinite;
+}
+
+@keyframes spin-loader {
+    to { transform: rotate(360deg); }
+}
+
+.btn-submit.loading .spinner {
+    display: inline-block;
+}
+
+.note {
+    font-size: 0.8rem;
+    text-align: center;
+    opacity: 0.7; /* Trochu viditeľnejšie */
+    margin: 8px 0;
+    padding: 0 10px;
+}
+
+/* --- FOOTER --- */
+footer {
+    padding: 20px;
+    opacity: 0.5;
+    font-size: 0.75rem;
+    text-align: center;
+}
+
+.timetable {
+    display: flex;
+    min-width: 600px; /* Aby sa to na malom displeji nezosypalo, ale dalo posúvať */
+}
+
+.time-col, .day-col {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    border-right: 1px solid black;
+}
+
+.time-col {
+    flex: 0 0 50px; /* Užší stĺpec pre hodiny */
+    /* background: var(--gold); */
+    color: var(--dark);
+    font-weight: bold;
+}
+
+/* .cell.header {
+    background: var(--gold);
+    color: var(--dark);
+    font-weight: bold;
+    text-align: center;
+    line-height: 1.2;
+} */
+
+/* Farby stavov */
+.cell.closed { background: var(--gray); }
+.cell.open { background: var(--green); }
+.cell.booked { background: var(--red); color: white; }
+
+/* Legenda */
+.legend {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    margin: 15px;
+    font-size: 0.8rem;
+    flex-wrap: wrap;
+}
+
+.leg-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.box {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+}
+
+.box.green { background: var(--green); }
+.box.red { background: var(--red); }
+.box.gray { background: var(--gray); }
+.box.gold { background: var(--gold); }
+.box.outOfRange { background: hsl(90, 41%, 36%); }
+
+
+/* Pridaj do style.css */
+.calendar-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 5px;
+}
+
+.week-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--brown);
+    padding: 5px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--gold);
+}
+
+#weekLabel {
+    font-size: 0.8rem;
+    color: var(--gold);
+    font-weight: bold;
+    min-width: 90px;
+    text-align: center;
+}
+
+.btn-nav {
+    background: var(--gold);
+    color: var(--dark);
+    border: none;
+    border-radius: 2px;
+    cursor: pointer;
+    font-weight: bold;
+    padding: 2px 8px;
+}
+
+.btn-nav:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+/* Štýl pre select, aby vyzeral ako tvoj pôvodný input */
+select {
+    width: 100%;
+    padding: 12px;
+    background: #3d2b22;
+    border: 1px solid #555;
+    color: white;
+    border-radius: 4px;
+    font-size: 1rem;
+}
+
+/* Zvýraznenie vybraného termínu v tabuľke */
+.cell.selected-preview {
+    background-color: var(--gold); /* Zlatá s 50% priehľadnosťou */
+    box-sizing: border-box;
+    animation: pulse 1.5s infinite; /* Jemné pulzovanie pre efekt */
+    color: var(--dark);
+}
+
+@keyframes pulse {
+    0% { opacity: 0.6; }
+    50% { opacity: 1; }
+    100% { opacity: 0.6; }
+}
+
+/* Zjednotenie sekcií */
+.timetable-section {
+    margin-top: 30px;
+    max-width: 800px; /* Širšia tabuľka pre lepšiu čitateľnosť */
+}
+
+.calendar-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 20px 0;
+    border-bottom: 1px solid var(--gold);
+    padding: 10px 0;
+}
+
+/* Tabuľka musí mať minimálnu šírku, aby sa dala scrollovať */
+.timetable {
+    display: flex;
+    min-width: 700px; 
+}
+
+main {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Voľné termíny v tabuľke budú teraz interaktívne */
+.cell.open {
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+}
+
+.cell.open:hover {
+    filter: brightness(1.2); /* Jemné zosvetlenie */
+    z-index: 1;
+    transition: all 0.1s ease-in-out;
+}
+
+.cell.open:active {
+    transform: scale(0.95); /* Efekt stlačenia */
+}
+
+
+/* Tabuľka ako grid */
+.timetable {
+    display: flex; /* Stĺpce vedľa seba */
+    min-width: 800px;
+}
+
+/* 1,5h termín zaberá 3 riadky v 30min rastri */
+.cell.open, .cell.booked, .cell.selected-preview {
+    grid-row: span 3; 
+    margin: 1px;
+    border-radius: 2px;
+    border: none;
+    font-weight: bold;
+    font-size: 0.8rem;
+}
+
+.timetable-section {
+    margin-top: 30px;
+    max-width: 1400px; /* Povolíme tabuľke roztiahnuť sa na veľkom monitore */
+    width: calc(100% - 20px); /* Presne 10px odsadenie z každej strany */
+    margin-left: 10px;
+    margin-right: 10px;
+}
+
+.timetable {
+    display: flex;
+    min-width: 700px; /* Na mobile zostane scrollovateľná do boku */
+    width: 100%; /* Na PC sa roztiahne naplno */
+}
+
+/* VYMAZANÉ grid-template-rows (nastavuje sa cez JS) */
+.time-col, .day-col {
+    display: grid;
+    flex: 1;
+    min-width: 80px; /* Aby sa dni nepučili na seba na mobile */
+    border-right: 1px solid black;
+}
+
+/* FIXNÝ STĹPEC S HODINAMI (Zostane vľavo pri scrollovaní) */
+.time-col { 
+    flex: 0 0 60px; 
+    position: sticky; 
+    left: 0; 
+    z-index: 2; 
+}
+
+/* FIXNÁ HLAVIČKA S DŇAMI (Zostane hore pri scrollovaní) */
+.cell.header {
+    position: sticky;
+    top: 0;
+    z-index: 15;
+    background: var(--gold);
+    color: var(--dark);
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 50px;
+    font-size: 0.8rem;
+    line-height: 1.2;
+}
+
+.cell.header.diagonal {
+    z-index: 50;
+    position: sticky;
+}
+
+/* 1,5h termín zaberá 3 riadky v 30min rastri */
+.cell.open, .cell.booked, .cell.selected-preview {
+    grid-row: span 3; 
+    margin: 2px; /* Mierne zväčšené okraje pre krajšie "kocky" */
+    border-radius: 2px;
+    border: none;
+    font-weight: bold;
+    font-size: 0.8rem;
+}
+
+main {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;               /* Pridané */
+    max-width: 100vw;          /* Pridané: Maximálna šírka celej stránky */
+    overflow-x: hidden;        /* Pridané: Definitívne zabráni scrollovaniu celej stránky do boku */
+    box-sizing: border-box;    /* Pridané */
+}
+
+.timetable-section {
+    margin-top: 30px;
+    max-width: 800px;
+    padding: 0 10px;           /* 10px ochranná zóna z oboch strán */
+    box-sizing: border-box;    /* Zabezpečí, že padding nezväčší celkovú šírku */
+}
+
+.timetable-container {
+    position: relative; 
+    min-height: 400px; 
+    width: 100%;
+    overflow: auto;            /* Zapne scrollbary (horizontálny aj vertikálny) LEN pre tabuľku */
+    background: var(--dark);
+    border-radius: 4px;
+    -webkit-overflow-scrolling: touch;
+    max-height: 75vh;
+}
+
+.cell {
+    position: relative;
+    height: 100%;              /* Dovolí bunke roztiahnuť sa podľa gridu */
+    box-sizing: border-box;    /* Pridané */
+    border-bottom: 1px solid rgb(0 0 0);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.7rem;
+    grid-row: span 1; 
+    border-radius: 2px;
+}
+
+.time-col .cell {
+    background-color: var(--gold);
+}
+
+.cell.open, .cell.booked, .cell.selected-preview {
+    grid-row: span 3;
+    height: auto;
+    margin: 0;
+    border: none;
+    font-weight: bold;
+    font-size: 0.8rem;
+    margin-bottom: 1px;
+}
+
+.slogan {
+    margin-top: -12px;
+}
+
+/* --- ZVOLENÝ TERMÍN UI --- */
+.termin-box {
+    background: #3d2b22;
+    border: 1px solid var(--gold);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 50px;
+    box-sizing: border-box;
+}
+
+.termin-text {
+    color: var(--gold);
+    font-weight: bold;
+    font-size: 1.1rem;
+    padding-left: 5px;
+}
+
+.btn-secondary {
+    width: 100%;
+    padding: 15px;
+    background: transparent;
+    color: var(--gold);
+    border: none;
+    border-radius: 4px;
+    font-weight: bold;
+    font-size: 1rem;
+    vertical-align: bottom;
+    cursor: pointer;
+    transition: all 0.15s ease-in-out;
+}
+
+.btn-secondary:disabled {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+#termin-selector-empty:has(.btn-secondary:disabled) {
+    pointer-events: none;
+}
+
+#termin-selector-empty {
+    transition: all 0.15s ease-in-out;
+}
+
+#termin-selector-empty:hover {
+    cursor: pointer;
+    background: var(--gold);
+}
+
+#termin-selector-empty:hover button {
+    color: var(--dark);
+}
+
+#termin-selector-filled.termin-box {
+    padding: 10px;
+}
+
+.btn-clear {
+    background: var(--red);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 10px 15px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+.btn-clear:hover {
+    background: #a00000;
+}
+
+/* ==========================================================================
+   MEDIA QUERY: ÚPRAVY PRE VEĽMI MALÉ DISPLEJE (mobily na výšku)
+   ========================================================================== */
+
+@media (max-width: 568px) {
+    .calendar-header-row {
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 15px;
+    }
+}
+
+@media (max-width: 480px) {
+    /* Zmeníme usporiadanie z vedľa seba na pod seba */
+    .datetime-row {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    /* Nadpis h1 môže byť ešte o niečo menší na super malých displejoch */
+    h1 {
+        font-size: 2rem;
+    }
+}
+
+@media (max-width: 420px) {
+    .termin-text {
+        font-size: 0.9rem;
+    }
+    .btn-clear {
+        padding: 7px 12px;
+    }
+}
+
+.cell.diagonal:before {
+    content: '';
+    position: absolute;
+    background: var(--dark);
+    height: 1px;
+    width: 60%;
+    transform: rotate(35deg);
+}
+
+.diagonal-den {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    font-size: 0.85rem;
+    line-height: 1;
+    color: var(--dark);
+}
+
+.diagonal-hod {
+    position: absolute;
+    bottom: 5px;
+    left: 5px;
+    font-size: 0.85rem;
+    line-height: 1;
+    color: var(--dark);
+}
+
+/* --- ÚPRAVA MULTI-LINE TEXTU V BUNKÁCH --- */
+.cell.open, .cell.booked, .cell.selected-preview {
+    flex-direction: column; /* Uloží texty pod seba */
+    line-height: 1.1;       /* Menšia medzera medzi riadkami */
+    text-align: center;
+}
+
+/* --- ZVÝRAZNENIE AKTUÁLNEHO DŇA --- */
+.day-col.current-day {
+    background-color: rgba(255, 255, 255, 0.05); /* Jemné podsvietenie celého stĺpca */
+}
+.day-col.current-day .cell.header {
+    background-color: #ffe066; /* Trochu svetlejšia zlatá pre dnešný deň */
+    box-shadow: inset 0 3px 0 var(--red); /* Červená linka zospodu hlavičky pre dôraz */
+}
+
+/* --- ZNEAKTÍVNENIE MINULOSTI (Past) --- */
+/* --- ZNEAKTÍVNENIE MINULOSTI (Past) --- */
+.cell.past {
+    cursor: not-allowed;
+    pointer-events: none; /* Úplne zablokuje hover efekty a klikanie */
+}
+
+/* Namiesto znižovania opacity meníme farby, aby červená čiara vnútri ostala 100% viditeľná */
+.cell.open.past {
+    background-color: #213c23 !important; /* Tmavá a tlmená zelená */
+    color: rgba(255, 255, 255, 0.25);
+    border-color: rgba(255, 255, 255, 0.05);
+}
+
+.cell.booked.past {
+    background-color: #3b1919 !important; /* Tmavá a tlmená červená */
+    color: rgba(255, 255, 255, 0.25);
+    border-color: rgba(255, 255, 255, 0.05);
+}
+
+.cell.closed.past {
+    background-color: #313131 !important; /* Ešte tmavšia sivá ako pozadie stránky */
+    color: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.02);
+}
+
+/* Uistíme sa, že červená čiara a gulička sú absolútne neprehliadnuteľné */
+.current-time-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background-color: var(--gold);
+    z-index: 5;
+    pointer-events: none; 
+    opacity: 1 !important; /* Istota, že čiara bude vždy žiariť */
+}
+
+.current-time-line::before {
+    content: '';
+    position: absolute;
+    left: -4px;
+    top: -4px;
+    width: 10px;
+    height: 10px;
+    background-color: var(--gold);
+    border-radius: 50%;
+}
+
+/* --- ZAMKNUTÝ BUFFER (Menej ako 30 minút do štartu) --- */
+.cell.open.locked-buffer {
+    background-color: hsl(90, 41%, 36%) !important; 
+    color: rgba(255, 255, 255, 0.4);
+    border-color: rgba(255, 255, 255, 0.1);
+    cursor: not-allowed;
+}
+
+/* ZÁCHRANA 1: Keď na bunku namierime myšou, okamžite ju hodíme nad všetky ostatné */
+.cell[data-tooltip]:hover {
+    z-index: 100 !important;
+}
+
+/* --- VLASTNÝ TOOLTIP PRE BARBAR SHOP --- */
+.cell[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: 95%; 
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: var(--dark);
+    color: var(--gold);
+    padding: 8px 12px;
+    border: 1px solid var(--gold);
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: bold;
+    
+    /* ZÁCHRANA 2: Zalomíme text a obmedzíme šírku */
+    white-space: normal; 
+    width: max-content;
+    max-width: 180px; 
+    text-align: center;
+    line-height: 1;
+    
+    z-index: 101 !important; 
+    opacity: 0;
+    pointer-events: none; 
+    transition: opacity 0.2s ease-in-out, bottom 0.2s ease-in-out;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.8);
+}
+
+.cell[data-tooltip]:hover::after {
+    opacity: 1;
+    z-index: 101;
+    bottom: 100%; 
+}
+
+/* ZÁCHRANA 3: Ošetrenie krajných stĺpcov, aby tooltip nevytiekol mimo tabuľku */
+
+/* Nedeľa (úplne posledný stĺpec) - tooltip zarovnáme na pravý okraj bunky */
+.day-col:last-child .cell[data-tooltip]::after {
+    left: auto;
+    right: 0px; /* Jemný presah, ale stále bezpečne v tabuľke */
+    transform: none;
+}
+
+/* Pondelok (prvý stĺpec dňa, hneď po hodinách) - tooltip zarovnáme na ľavý okraj bunky */
+.day-col:nth-child(2) .cell[data-tooltip]::after {
+    left: 0px;
+    transform: none;
+}
+
+/* --- PREPOJENÝ HOVER EFEKT PRE ROZDELENÉ TERMÍNY --- */
+.cell.open:hover, 
+.cell.open.hover-active {
+    filter: brightness(1.2);
+    z-index: 2;
+    transition: all 0.1s ease-in-out;
+}
+
+/* Vizuálne prepojenie - Hlavička termínu (pred polnocou) */
+.slot-head {
+    border-bottom: 2px dashed rgba(255, 255, 255, 0.4) !important;
+    border-bottom-left-radius: 0 !important;
+    border-bottom-right-radius: 0 !important;
+}
+
+/* Vizuálne prepojenie - Chvost termínu (po polnoci) */
+.slot-tail {
+    border-top: 2px dashed rgba(255, 255, 255, 0.4) !important;
+    border-top-left-radius: 0 !important;
+    border-top-right-radius: 0 !important;
+}
+
+/* --- TOAST NOTIFIKÁCIE (POPUP) --- */
+.toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none; /* Zabraňuje blokovaniu kliknutí pod kontajnerom */
+}
+
+.toast {
+    background-color: var(--brown);
+    color: var(--white);
+    padding: 15px 20px;
+    border-radius: 4px;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.8);
+    font-weight: bold;
+    font-size: 0.95rem;
+    pointer-events: auto;
+    border-left: 5px solid var(--gold); /* Zlatá pre úspech */
+    animation: slideInRight 0.4s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+}
+
+.toast.error {
+    border-left-color: var(--red); /* Červená pre chybu */
+}
+
+@keyframes slideInRight {
+    from { transform: translateX(120%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes fadeOutToast {
+    to { opacity: 0; transform: translateY(-10px); }
+}
+
+/* --- CUSTOM SCROLLBAR PRE CELÚ STRÁNKU --- */
+/* Šírka celej lišty */
+::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+}
+
+/* "Dráha", po ktorej sa bežec pohybuje (tmavé pozadie) */
+::-webkit-scrollbar-track {
+    background: var(--dark); 
+    border-left: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Samotný bežec (zlatý s prechodom) */
+::-webkit-scrollbar-thumb {
+    background-color: var(--gold);
+    border-radius: 10px;
+    border: 3px solid var(--dark); /* Vytvorí pekný okraj, aby bežec nebol "prilepený" na krajoch */
+}
+
+/* Hover efekt pre bežec (stmavenie zlatej farby) */
+::-webkit-scrollbar-thumb:hover {
+    background-color: #d4ac0d; /* Trošku tmavšia zlatá */
+}
+
+/* Roh, kde sa stretávajú vertikálny a horizontálny scrollbar (napríklad v tabuľke) */
+::-webkit-scrollbar-corner {
+    background-color: var(--dark);
+}
+
+/* --- FIREFOX PODPORA (Odľahčená verzia) --- */
+* {
+    scrollbar-width: thin; /* Tenší scrollbar */
+    scrollbar-color: var(--gold) var(--dark); /* bežec | dráha */
+}
+
+/* Kontajner tabuľky */
+.timetable-container {
+    overflow: auto;
+    max-height: 600px;
+    margin-top: 10px;
+    border-radius: 4px;
+    position: relative; 
+}
+
+/* Samotná mriežka */
+.timetable {
+    display: flex;
+    min-width: min-content;
+}
+
+/* 1. ĽAVÝ STĹPEC JE KRÁĽ (z-index 30) */
+.time-col {
+    position: sticky;
+    left: 0;
+    z-index: 30; /* TOTO je to tajomstvo! Celý tento stĺpec musí byť nad dňami! */
+    background-color: var(--dark);
+}
+
+.time-col .header.diagonal {
+    position: sticky;
+    top: 0;
+    z-index: 40; 
+    background-color: var(--gold);
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.3);
+}
+
+.time-col .cell:not(.header) {
+    position: relative;
+    z-index: 10;
+}
+
+.day-col .header {
+    position: sticky;
+    top: 0;
+    z-index: 20; 
+    background-color: var(--gold);
+    border-bottom: 1px solid var(--dark);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+.day-col .cell:not(.header) {
+    position: relative;
+    z-index: 10; 
+}
+
+#loading-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgb(35 35 35 / 65%); /* Tmavý priehľadný podklad */
+    display: none; /* Schovaný, kým sa nenačítavajú dáta */
+    align-items: center;
+    justify-content: center;
+    z-index: 1000; /* DÔLEŽITÉ: Musí byť viac ako roh tabuľky (999)! */
+    color: var(--gold);
+    font-weight: bold;
+    backdrop-filter: blur(6px); /* Jemné rozmazanie tabuľky pod ním */
+    border-radius: 4px; /* Aby rohy lícovali s kontajnerom */
+}

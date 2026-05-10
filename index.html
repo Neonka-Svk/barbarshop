@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Barbar Shop | Objednaj sa teraz!</title>
+    <link rel="icon" type="image/x-icon" href="barbar_logo.webp">
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="toast-container" class="toast-container"></div>
+
+    <header>
+        <div class="header-content">
+            <img src="barbar_logo.webp" alt="Logo" class="logo">
+            <h1>BARBAR SHOP</h1>
+            <p class="slogan">Holičstvo pre bojovníka</p>
+        </div>
+    </header>
+    
+    <main>
+        <section class="booking-container">
+            <h2>Objednaj sa na "údržbu"</h2>
+            <form id="booking-form">
+                <div class="input-group">
+                    <label for="name">Meno a priezvisko bojovníka: *</label>
+                    <input type="text" id="name" name="name" placeholder="Napr. Július Cézar" required>
+                </div>
+
+                <div class="input-group">
+                    <label for="email">E-mail bojovníka: *</label>
+                    <input type="text" id="email" name="email" placeholder="Napr. julko.cezarik@azet.sk" required>
+                </div>
+                
+                <div class="input-group">
+                    <label for="service">Služba: *</label>
+                    <select id="service">
+                        <option value="Pánsky strih">Sekera & Nožnice (Pánsky strih) [100 Kč]</option>
+                        <option value="Úprava brady">Krotenie šelmy (Úprava brady) [50 Kč]</option>
+                        <option value="Vlasy a brada">Kráľovský rituál (Vlasy a brada) [150 Kč]</option>
+                    </select>
+                </div>
+                
+                <div class="input-group">
+                    <label for="">Termín: *</label>
+                    
+                    <div id="termin-selector-empty" class="termin-box">
+                        <button type="button" id="btn-go-to-calendar" class="btn-secondary" disabled>VYBRAŤ TERMÍN</button>
+                    </div>
+                    
+                    <div id="termin-selector-filled" class="termin-box" style="display: none;">
+                        <span id="selected-termin-text" class="termin-text"></span>
+                        <button type="button" id="btn-clear-termin" class="btn-clear">✖ ZRUŠIŤ</button>
+                    </div>
+                    <p class="note">Rezerváciu je možné vykonať max. 30 minút vopred!</p>
+
+                    <input type="hidden" id="date" required>
+                    <input type="hidden" id="time" required>
+                </div>
+                
+                <button type="submit" class="btn-submit"><span class="spinner"></span><span class="btn-text">ODOSLAŤ OBJEDNÁVKU</span></button>
+            </form>
+            <p class="note">Povinné údaje sú označené *</p>
+        </section>
+        
+        <section class="booking-container timetable-section">
+            <div class="calendar-header-row">
+                <h2 style="border:none; margin:0;">Výber termínu a obsadenosť</h2>
+                <div class="week-controls">
+                    <button type="button" id="prevWeek" class="btn-nav" disabled>&lt;</button>
+                    <span id="weekLabel">Tento týždeň</span>
+                    <button type="button" id="nextWeek" class="btn-nav">&gt;</button>
+                </div>
+            </div>
+            <div style="position: relative;"> 
+                <div class="timetable-container">
+                    <div id="timetable" class="timetable"></div>
+                </div>
+                
+                <div id="loading-overlay" style="display: none;">
+                    <span>Aktualizujem bojové plány...</span>
+                </div>
+
+            </div>
+            <div class="legend">
+                <div class="leg-item"><span class="box green"></span> Dostupné</div>
+                <div class="leg-item"><span class="box red"></span> Obsadené</div>
+                <div class="leg-item"><span class="box gray"></span> Zatvorené</div>
+                <div class="leg-item"><span class="box gold"></span> Aktuálne zvolený termín</div>
+                <div class="leg-item"><span class="box outOfRange"></span> Po možnosti rezervovať</div>
+            </div>
+        </section>
+    </main>
+    
+    <footer>
+        <p>&copy; 2026 Barbar Shop. Sila a česť.</p>
+    </footer>
+    
+    <script src="script.js"></script>
+</body>
+</html>
