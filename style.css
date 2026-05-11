@@ -613,6 +613,7 @@ main {
 /* --- ZVÝRAZNENIE AKTUÁLNEHO DŇA --- */
 .day-col.current-day {
     background-color: rgba(255, 255, 255, 0.05); /* Jemné podsvietenie celého stĺpca */
+    z-index: 15; /* snad oprava toho tooltipu, ktory sa zobrazuje 30 minut pred zablokovanou rezervaciou */
 }
 .day-col.current-day .cell.header {
     background-color: #ffe066; /* Trochu svetlejšia zlatá pre dnešný deň */
