@@ -633,11 +633,13 @@ document.getElementById("booking-form").addEventListener("submit", async functio
 
     const btn = document.querySelector('.btn-submit');
     const btnText = btn.querySelector('.btn-text'); // Chytíme textovú časť tlačidla
+    const kalendar = document.querySelector('.timetable-container');
     
     // --- ZAPNUTIE SPINNERA ---
     btn.classList.add('loading');
     btnText.innerText = "OBJEDNÁVAM...";
     btn.disabled = true;
+    kalendar.style.pointerEvents = "none";
 
     try {
         await fetch(SCRIPT_URL, {
@@ -666,6 +668,7 @@ document.getElementById("booking-form").addEventListener("submit", async functio
         // --- VYPNUTIE SPINNERA ---
         btn.classList.remove('loading');
         btnText.innerText = "ODOSLAŤ OBJEDNÁVKU";
+        kalendar.style.pointerEvents = "all";
         btn.disabled = false;
     }
 });
