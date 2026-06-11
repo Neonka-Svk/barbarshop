@@ -427,13 +427,35 @@ function renderTimetable() {
         });
     }
 
+    // // Ak po všetkom nemáme žiadne sloty (napr. len celotýždňová dovolenka)
+    // if (minMin >= maxMin || minMin === 24 * 60) { 
+    //     minMin = 9 * 60; 
+    //     maxMin = 17 * 60; 
+    // } else {
+    //     // Poistka proti pretečeniu pod tabuľku (polnoc je hranica)
+    //     if (maxMin > 1440) maxTime = 1440; 
+    // }
+
+    // vyuzivane pre vizualne zobrazenie aj zatvorenych casti 
+    // (aby to neboli len pri jednotnom nastaveni casov napr 2 riadky - zvysok tabulky bol prazdny)
+    let kvaziZaciatok = 10;
+    let kvaziKoniec = 17;
+
     // Ak po všetkom nemáme žiadne sloty (napr. len celotýždňová dovolenka)
     if (minMin >= maxMin || minMin === 24 * 60) { 
-        minMin = 9 * 60; 
-        maxMin = 17 * 60; 
+        minMin = kvaziZaciatok * 60; 
+        maxMin = kvaziKoniec * 60; 
     } else {
-        // Poistka proti pretečeniu pod tabuľku (polnoc je hranica)
-        if (maxMin > 1440) maxTime = 1440; 
+        // Zafixujeme, aby kalendár z dizajnových dôvodov VŽDY začínal aspoň o 9:00.
+        // Ak však holič príde do práce o 6:00, kalendár začne od 6:00 (vyberie menšiu hodnotu).
+        minMin = Math.min(minMin, kvaziZaciatok * 60);
+        
+        // Zafixujeme, aby kalendár VŽDY končil aspoň o 17:00.
+        // Ak má otvorené do polnoci, roztiahne sa až tam.
+        maxMin = Math.max(maxMin, kvaziKoniec * 60);
+
+        // Opravená poistka proti pretečeniu pod tabuľku (polnoc je tvrdá hranica)
+        if (maxMin > 1440) maxMin = 1440; 
     }
 
     minMin = Math.floor(minMin / 60) * 60;
