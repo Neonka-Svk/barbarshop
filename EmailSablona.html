@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rezervácia Barbar Shop</title>
+    <style>
+        /* Tieto štýly slúžia len ako doplnok pre klientov, ktorí ich podporujú */
+        body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+        table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+        img { -ms-interpolation-mode: bicubic; }
+        
+        /* Reset */
+        img { border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
+        table { border-collapse: collapse !important; }
+        body { height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; }
+
+        /* Responzivita pre mobily */
+        @media screen and (max-width: 600px) {
+            .container { width: 100% !important; max-width: 100% !important; }
+            .content-padding { padding: 20px !important; }
+            .h1 { font-size: 22px !important; }
+        }
+    </style>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f4f4f5; font-family: Arial, sans-serif;">
+
+  <table border="0" cellpadding="0" cellspacing="0" width="100%">
+    <tr>
+        <td align="center" style="padding: 10px 0; font-size: 11px; color: #999999;">
+            Nezobrazuje sa ti tento e-mail správne? 
+            <a href="<?= viewUrl ?>" target="_blank" style="color: #d32f2f; text-decoration: underline;">Pozri si ho v prehliadači</a>.
+        </td>
+    </tr>
+  </table>
+
+    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f4f4f5; padding: 20px 0;">
+        <tr>
+            <td align="center">
+                <table border="0" cellpadding="0" cellspacing="0" width="600" class="container" style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.1); border-collapse: separate;">
+                    
+                    <tr>
+                        <td align="center" style="background-color: #1a1a1a; padding: 30px; border-bottom: 4px solid #f0c419;">
+                            <img src="https://raw.githubusercontent.com/Neonka-Svk/barbarshop/refs/heads/main/barbar_logo.png" alt="Barbar Shop" width="150" style="display: block; max-width: 150px;">
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td class="content-padding" style="padding: 40px; color: #333333; line-height: 1.6; font-size: 16px;">
+                            <h1 class="h1" style="color: #1a1a1a; font-size: 24px; font-weight: bold; margin: 0 0 20px 0; text-align: center; font-family: Arial, sans-serif;"><?= titulok ?></h1>
+                            
+                            <p style="margin: 0 0 15px 0;">Zdravím ťa, <strong style="color: #1a1a1a;"><?= meno ?></strong>,</p>
+                            <p style="margin: 0 0 25px 0;"><?= uvodnyText ?></p>
+                            
+                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #fafafa; border: 1px solid #eaeaea; border-radius: 8px; border-collapse: separate;">
+                                <tr>
+                                    <td style="padding: 20px;">
+                                        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 15px;">
+                                            <tr>
+                                                <td style="font-size: 12px; text-transform: uppercase; color: #888888; font-weight: bold; padding-bottom: 4px;">Rezervovaná služba</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="font-size: 18px; color: #1a1a1a; font-weight: bold;"><?= sluzba ?></td>
+                                            </tr>
+                                        </table>
+
+                                        <table border="0" cellpadding="0" cellspacing="0" width="100%" <?= !jeHolic ? 'style="margin-bottom: 0;"' : 'style="margin-bottom: 15px;"' ?>>
+                                            <tr>
+                                                <td style="font-size: 12px; text-transform: uppercase; color: #888888; font-weight: bold; padding-bottom: 4px;">Dátum a Čas</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="font-size: 18px; color: #1a1a1a; font-weight: bold;"><?= datum ?> o <?= cas ?></td>
+                                            </tr>
+                                        </table>
+
+                                        <? if (jeHolic) { ?>
+                                        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="border-top: 1px solid #eaeaea; margin-top: 15px;">
+                                            <tr>
+                                                <td style="font-size: 12px; text-transform: uppercase; color: #888888; font-weight: bold; padding-top: 15px; padding-bottom: 4px;">Kontakt na klienta</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="font-size: 16px;">
+                                                    <a href="mailto:<?= emailKlienta ?>" style="color: #d32f2f; text-decoration: none; font-weight: bold;"><?= emailKlienta ?></a>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                        <? } ?>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                                <tr>
+                                    <td style="padding: 30px 0;">
+                                        <div style="border-top: 1px solid #eaeaea;"></div>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #fff9f9; border: 1px dashed #ffcdd2; border-radius: 8px; border-collapse: separate;">
+                                <tr>
+                                    <td align="center" style="padding: 25px;">
+                                        <p style="margin: 0 0 15px 0; font-size: 14px; color: #666666;"><?= vyzvaText ?></p>
+                                        
+                                        <table border="0" cellpadding="0" cellspacing="0">
+                                            <tr>
+                                                <td align="center" bgcolor="#d32f2f" style="border-radius: 6px;">
+                                                    <a href="<?= cancelUrl ?>" target="_blank" style="font-size: 15px; font-family: Arial, sans-serif; color: #ffffff; text-decoration: none; border-radius: 6px; padding: 12px 24px; border: 1px solid #d32f2f; display: inline-block; font-weight: bold;">ZRUŠIŤ TERMÍN</a>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td align="center" style="background-color: #f9f9f9; padding: 25px; border-top: 1px solid #eaeaea; font-size: 12px; color: #999999; line-height: 1.5;">
+                          <? if (!jeHolic) { ?>
+                            <p style="margin: 0 0 10px 0;">Tento e-mail bol vygenerovaný automaticky systémom Barbar Shop.<br>Prosíme, neodpovedajte naň.</p>
+                          <? } ?>  
+                            <p style="margin: 0;">&copy; 2026 Barbar Shop. Sila a česť.</p>
+                        </td>
+                    </tr>
+
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

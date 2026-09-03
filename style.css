@@ -159,25 +159,6 @@ footer {
     text-align: center;
 }
 
-.timetable {
-    display: flex;
-    min-width: 600px; /* Aby sa to na malom displeji nezosypalo, ale dalo posúvať */
-}
-
-.time-col, .day-col {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    border-right: 1px solid black;
-}
-
-.time-col {
-    flex: 0 0 50px; /* Užší stĺpec pre hodiny */
-    /* background: var(--gold); */
-    color: var(--dark);
-    font-weight: bold;
-}
-
 /* .cell.header {
     background: var(--gold);
     color: var(--dark);
@@ -219,15 +200,6 @@ footer {
 .box.gold { background: var(--gold); }
 .box.outOfRange { background: hsl(90, 41%, 36%); }
 
-
-/* Pridaj do style.css */
-.calendar-header-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 5px;
-}
-
 .week-controls {
     display: flex;
     align-items: center;
@@ -261,17 +233,6 @@ footer {
     cursor: not-allowed;
 }
 
-/* Štýl pre select, aby vyzeral ako tvoj pôvodný input */
-select {
-    width: 100%;
-    padding: 12px;
-    background: #3d2b22;
-    border: 1px solid #555;
-    color: white;
-    border-radius: 4px;
-    font-size: 1rem;
-}
-
 /* Zvýraznenie vybraného termínu v tabuľke */
 .cell.selected-preview {
     background-color: var(--gold); /* Zlatá s 50% priehľadnosťou */
@@ -286,12 +247,6 @@ select {
     100% { opacity: 0.6; }
 }
 
-/* Zjednotenie sekcií */
-.timetable-section {
-    margin-top: 30px;
-    max-width: 800px; /* Širšia tabuľka pre lepšiu čitateľnosť */
-}
-
 .calendar-header-row {
     display: flex;
     justify-content: space-between;
@@ -299,19 +254,6 @@ select {
     margin: 20px 0;
     border-bottom: 1px solid var(--gold);
     padding: 10px 0;
-}
-
-/* Tabuľka musí mať minimálnu šírku, aby sa dala scrollovať */
-.timetable {
-    display: flex;
-    min-width: 700px; 
-}
-
-main {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
 }
 
 /* Voľné termíny v tabuľke budú teraz interaktívne */
@@ -331,50 +273,13 @@ main {
 }
 
 
-/* Tabuľka ako grid */
-.timetable {
-    display: flex; /* Stĺpce vedľa seba */
-    min-width: 800px;
-}
-
-/* 1,5h termín zaberá 3 riadky v 30min rastri */
-.cell.open, .cell.booked, .cell.selected-preview {
-    grid-row: span 3; 
-    margin: 1px;
-    border-radius: 2px;
-    border: none;
-    font-weight: bold;
-    font-size: 0.8rem;
-}
-
-.timetable-section {
-    margin-top: 30px;
-    max-width: 1400px; /* Povolíme tabuľke roztiahnuť sa na veľkom monitore */
-    width: calc(100% - 20px); /* Presne 10px odsadenie z každej strany */
-    margin-left: 10px;
-    margin-right: 10px;
-}
-
-.timetable {
-    display: flex;
-    min-width: 700px; /* Na mobile zostane scrollovateľná do boku */
-    width: 100%; /* Na PC sa roztiahne naplno */
-}
-
 /* VYMAZANÉ grid-template-rows (nastavuje sa cez JS) */
 .time-col, .day-col {
     display: grid;
+    flex-direction: column;
     flex: 1;
     min-width: 80px; /* Aby sa dni nepučili na seba na mobile */
     border-right: 1px solid black;
-}
-
-/* FIXNÝ STĹPEC S HODINAMI (Zostane vľavo pri scrollovaní) */
-.time-col { 
-    flex: 0 0 60px; 
-    position: sticky; 
-    left: 0; 
-    z-index: 2; 
 }
 
 /* FIXNÁ HLAVIČKA S DŇAMI (Zostane hore pri scrollovaní) */
@@ -398,16 +303,6 @@ main {
     position: sticky;
 }
 
-/* 1,5h termín zaberá 3 riadky v 30min rastri */
-.cell.open, .cell.booked, .cell.selected-preview {
-    grid-row: span 3; 
-    margin: 2px; /* Mierne zväčšené okraje pre krajšie "kocky" */
-    border-radius: 2px;
-    border: none;
-    font-weight: bold;
-    font-size: 0.8rem;
-}
-
 main {
     display: flex;
     flex-direction: column;
@@ -426,17 +321,6 @@ main {
     box-sizing: border-box;    /* Zabezpečí, že padding nezväčší celkovú šírku */
 }
 
-.timetable-container {
-    position: relative; 
-    min-height: 400px; 
-    width: 100%;
-    overflow: auto;            /* Zapne scrollbary (horizontálny aj vertikálny) LEN pre tabuľku */
-    background: var(--dark);
-    border-radius: 4px;
-    -webkit-overflow-scrolling: touch;
-    max-height: 75vh;
-}
-
 .cell {
     position: relative;
     height: 100%;              /* Dovolí bunke roztiahnuť sa podľa gridu */
@@ -452,16 +336,6 @@ main {
 
 .time-col .cell {
     background-color: var(--gold);
-}
-
-.cell.open, .cell.booked, .cell.selected-preview {
-    grid-row: span 3;
-    height: auto;
-    margin: 0;
-    border: none;
-    font-weight: bold;
-    font-size: 0.8rem;
-    margin-bottom: 1px;
 }
 
 .slogan {
@@ -605,6 +479,14 @@ main {
 
 /* --- ÚPRAVA MULTI-LINE TEXTU V BUNKÁCH --- */
 .cell.open, .cell.booked, .cell.selected-preview {
+    grid-row: span 3;
+    margin: 0;
+    border-radius: 2px;
+    border: none;
+    font-weight: bold;
+    font-size: 0.8rem;
+    height: auto;
+    margin-bottom: 1px;
     flex-direction: column; /* Uloží texty pod seba */
     line-height: 1.1;       /* Menšia medzera medzi riadkami */
     text-align: center;
@@ -620,7 +502,6 @@ main {
     box-shadow: inset 0 3px 0 var(--red); /* Červená linka zospodu hlavičky pre dôraz */
 }
 
-/* --- ZNEAKTÍVNENIE MINULOSTI (Past) --- */
 /* --- ZNEAKTÍVNENIE MINULOSTI (Past) --- */
 .cell.past {
     cursor: not-allowed;
@@ -831,21 +712,29 @@ main {
 
 /* Kontajner tabuľky */
 .timetable-container {
+    position: relative;
+    min-height: 400px;
+    width: 100%;
     overflow: auto;
+    background: var(--dark);
+    border-radius: 4px;
+    -webkit-overflow-scrolling: touch;
     max-height: 600px;
     margin-top: 10px;
-    border-radius: 4px;
-    position: relative; 
 }
 
 /* Samotná mriežka */
 .timetable {
     display: flex;
     min-width: min-content;
+    width: 100%;
 }
 
 /* 1. ĽAVÝ STĹPEC JE KRÁĽ (z-index 30) */
 .time-col {
+    flex: 0 0 60px;
+    color: var(--dark);
+    font-weight: bold;
     position: sticky;
     left: 0;
     z-index: 30; /* TOTO je to tajomstvo! Celý tento stĺpec musí byť nad dňami! */
@@ -894,4 +783,14 @@ main {
     font-weight: bold;
     backdrop-filter: blur(6px); /* Jemné rozmazanie tabuľky pod ním */
     border-radius: 4px; /* Aby rohy lícovali s kontajnerom */
+}
+
+/* --- HONEYPOT (anti-spam) - skryté pole vo formulári, ktoré vidia len roboty --- */
+.hp-field {
+    position: absolute;
+    left: -9999px;
+    top: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
 }

@@ -1,8 +1,7 @@
 // TODO: dalo by sa to refaktornut ngl xdd
 
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzQyJbBAKbE6doPZOgNCcIDiUnsU70AZ_WhMULilehSN4VEN-5i8fHM_t39KUTvMCoq/exec'; 
-let currentWeekOffset = 0; 
-let globalObsadeneTerminy = [];
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzQyJbBAKbE6doPZOgNCcIDiUnsU70AZ_WhMULilehSN4VEN-5i8fHM_t39KUTvMCoq/exec';
+let currentWeekOffset = 0;
 let globalData = { bookings: [], custom: [], defaultHours: [] };
 
 function getLocalDateString(date) {
@@ -10,6 +9,18 @@ function getLocalDateString(date) {
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
+}
+
+// Deň v týždni (1=Pondelok...7=Nedeľa) čisto z čísel dátumu, bez new Date(ymd).getDay() -
+// ten je citlivý na časové pásmo prehliadača a vie tesne okolo polnoci vrátiť iný deň, než bol zadaný.
+// Rovnaká logika beží aj na serveri (google_sheet_code.gs), nech obe strany počítajú identicky.
+function getIsoDayOfWeek(ymd) {
+    const parts = String(ymd).split('-').map(Number);
+    let y = parts[0], m = parts[1], d = parts[2];
+    const t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    if (m < 3) y -= 1;
+    const dow = (y + Math.floor(y / 4) - Math.floor(y / 100) + Math.floor(y / 400) + t[m - 1] + d) % 7;
+    return dow === 0 ? 7 : dow;
 }
 
 function pridaj90Minut(cas) {
@@ -55,9 +66,7 @@ function getRawSlotsForDate(dateStr) {
         });
     } else {
         // Ak NEMA vlastne otvorene, pouzijeme BEŽNÉ hodiny
-        const d = new Date(dateStr);
-        let dayOfWeek = d.getDay(); 
-        if (dayOfWeek === 0) dayOfWeek = 7;
+        let dayOfWeek = getIsoDayOfWeek(dateStr);
 
         const rozpisNaDnes = globalData.defaultHours.find(h => h.den === dayOfWeek);
 
@@ -332,50 +341,6 @@ function updateUI() {
     renderTimetable();
 }
 
-function updateAvailableTimes() {
-    const dateInput = document.getElementById('date');
-    const timeSelect = document.getElementById('time');
-    const dateVal = dateInput.value;
-    const povodnyVyber = timeSelect.value;
-    
-    if (!dateVal) return;
-
-    const selectedDate = new Date(dateVal);
-    const dayIndex = selectedDate.getDay(); 
-    const isWeekend = (dayIndex === 0 || dayIndex === 6);
-    const defaultCasy = isWeekend ? vikendoveCasy : pracovneCasy;
-    
-    timeSelect.innerHTML = '<option value="">Vyber si čas</option>';
-
-    // Zistíme, či pre tento deň existujú adminom pridané extra časy
-    const extraCasy = globalObsadeneTerminy
-        .filter(t => t.datum === dateVal && t.meno === "ADMIN_OPEN")
-        .map(t => t.cas);
-    
-    // Spojíme bežné časy s extra časmi a odstránime duplicity
-    const vsetkyMozneCasy = [...new Set([...defaultCasy, ...extraCasy])].sort();
-
-    vsetkyMozneCasy.forEach(timeStr => {
-        const zaznam = globalObsadeneTerminy.find(t => t.datum === dateVal && t.cas === timeStr);
-        const isBooked = zaznam && zaznam.meno !== "ADMIN_OPEN";
-        const isAdminBlocked = zaznam && zaznam.meno === "ADMIN_BLOCK";
-
-        if (isAdminBlocked) return; // Admin tento čas úplne skryl
-
-        const opt = document.createElement('option');
-        opt.value = timeStr;
-        opt.innerText = timeStr;
-        if (isBooked) { opt.disabled = true; opt.innerText += ' (Obsadené)'; }
-        timeSelect.appendChild(opt);
-    });
-
-    // KONTROLA: Ak bol čas vybratý a po zmene dňa už nie je v ponuke, vynuluj ho
-    const staleDostupny = Array.from(timeSelect.options).some(o => o.value === povodnyVyber && !o.disabled);
-    timeSelect.value = staleDostupny ? povodnyVyber : "";
-
-    updateUI(); 
-}
-
 function renderTimetable() {
     const timetable = document.getElementById('timetable');
     const selDate = document.getElementById('date').value;
@@ -639,6 +604,8 @@ document.getElementById("booking-form").addEventListener("submit", async functio
     const meno = document.getElementById("name").value;
     const email = document.getElementById("email").value;
     const sluzba = document.getElementById("service").value;
+    const websiteEl = document.getElementById("website");
+    const website = websiteEl ? websiteEl.value : ""; // honeypot proti botom - človek toto pole nevidí a nevyplní
 
     // --- REGEX KONTROLA E-MAILU ---
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -664,24 +631,36 @@ document.getElementById("booking-form").addEventListener("submit", async functio
     kalendar.style.pointerEvents = "none";
 
     try {
-        await fetch(SCRIPT_URL, {
+        // Bez mode:'no-cors' - vďaka tomu vieme prečítať skutočnú odpoveď servera (napr. "termín je už
+        // obsadený" alebo "zadaj platný e-mail") namiesto toho, aby sme vždy len predpokladali úspech.
+        const response = await fetch(SCRIPT_URL, {
             method: 'POST',
-            mode: 'no-cors', 
             headers: { 'Content-Type': 'text/plain' },
-            body: JSON.stringify({ meno, email, sluzba, datum, cas })
+            body: JSON.stringify({ meno, email, sluzba, datum, cas, website })
         });
 
-        // Úspešný toast namiesto alertu
-        showToast(`Sila a česť, ${meno}! Objednávka bola odoslaná.`, "success");
-        
-        document.getElementById("booking-form").reset();
-        document.getElementById("date").value = "";
-        document.getElementById("time").value = "";
-        updateSelectedTerminUI();
+        let result = null;
+        try {
+            result = await response.json();
+        } catch (parseErr) {
+            result = null; // odpoveď sa nepodarilo prečítať - správame sa ako predtým (predpokladáme úspech)
+        }
 
-        // TRIK PRE TLAČIDLO: Odstránili sme slovo "await", aby sa tlačidlo 
-        // odblokovalo okamžite a tabuľka sa načítala na pozadí
-        refreshData(); 
+        if (result && result.error) {
+            showToast(result.error, "error");
+        } else {
+            // Úspešný toast namiesto alertu
+            showToast(`Sila a česť, ${meno}! Objednávka bola odoslaná.`, "success");
+
+            document.getElementById("booking-form").reset();
+            document.getElementById("date").value = "";
+            document.getElementById("time").value = "";
+            updateSelectedTerminUI();
+
+            // TRIK PRE TLAČIDLO: Odstránili sme slovo "await", aby sa tlačidlo
+            // odblokovalo okamžite a tabuľka sa načítala na pozadí
+            refreshData();
+        }
 
     } catch (e) {
         console.error('Chyba!', e);
@@ -734,7 +713,9 @@ function showToast(message, type = 'success') {
 
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    toast.innerHTML = message;
+    // textContent (nie innerHTML) - message môže obsahovať meno, ktoré zákazník sám zadal do formulára,
+    // takže ho nesmieme vykresľovať ako HTML (inak by šlo vložiť napr. <img onerror=...> a spustiť si JS).
+    toast.textContent = message;
 
     container.appendChild(toast);
 

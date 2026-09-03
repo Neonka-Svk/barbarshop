@@ -49,9 +49,14 @@
 
                 <div class="input-group">
                     <label for="email">E-mail bojovníka: *</label>
-                    <input type="text" id="email" name="email" placeholder="Napr. julko.cezarik@azet.sk" required>
+                    <input type="email" id="email" name="email" placeholder="Napr. julko.cezarik@azet.sk" required>
                 </div>
-                
+
+                <div class="hp-field" aria-hidden="true">
+                    <label for="website">Nechaj toto pole prázdne</label>
+                    <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+                </div>
+
                 <div class="input-group">
                     <label for="service">Služba: *</label>
                     <select id="service">
