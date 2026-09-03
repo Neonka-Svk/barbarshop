@@ -41,6 +41,41 @@ function minutyNaCas(min) {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
+// Prevedie {od, do} (časy v tvare "HH:MM") na rozsah v minútach {start, end}, s ošetrením prechodu cez polnoc.
+function toRange(r) {
+    const start = casNaMinuty(r.od);
+    let end = casNaMinuty(r.do);
+    if (end < start) end += 24 * 60;
+    return { start, end };
+}
+
+// Odpočíta z rozsahu `range` ({start,end} v minútach) všetky rozsahy z poľa `occupied` a vráti
+// zvyšné (neprekrývajúce sa) kusy. Vďaka tomu ROZŠÍRENÉ generuje sloty len z toho, čo bežné/OTVORENÉ
+// hodiny ešte nepokrývajú (inak by pri prekryve s iným 90-min rastrom vznikli poprehadzované okná).
+function subtractRanges(range, occupied) {
+    let pieces = [range];
+    occupied.forEach(o => {
+        let next = [];
+        pieces.forEach(p => {
+            if (o.end <= p.start || o.start >= p.end) { next.push(p); return; }
+            if (o.start > p.start) next.push({ start: p.start, end: Math.min(o.start, p.end) });
+            if (o.end < p.end) next.push({ start: Math.max(o.end, p.start), end: p.end });
+        });
+        pieces = next;
+    });
+    return pieces.filter(p => p.end > p.start);
+}
+
+// Poskladá 90-minútové sloty z poľa rozsahov {start,end}, každý rozsah od svojho vlastného začiatku.
+function slotsFromRanges(ranges) {
+    let out = [];
+    ranges.forEach(r => {
+        let start = r.start;
+        while (start + 90 <= r.end) { out.push(start); start += 90; }
+    });
+    return out;
+}
+
 function getRawSlotsForDate(dateStr) {
     let rawSlots = [];
     const denneCustom = globalData.custom.filter(c => c.datum === dateStr);
@@ -52,48 +87,30 @@ function getRawSlotsForDate(dateStr) {
 
     if (otvoreneCustom.length > 0) {
         // Ak má vlastné OTVORENÉ, úplne ignorujeme bežné hodiny
-        // Pre istotu k nim ale prilepíme aj ROZŠÍRENÉ (ak by si náhodou zadal oba stavy v ten istý deň)
-        const vsetkyOtvorene = [...otvoreneCustom, ...rozsireneCustom];
-        
-        vsetkyOtvorene.forEach(r => {
-            let start = casNaMinuty(r.od);
-            let koniec = casNaMinuty(r.do);
-            if (koniec < start) koniec += 24 * 60; 
-            while (start + 90 <= koniec) {
-                rawSlots.push(start);
-                start += 90;
-            }
+        const otvoreneRanges = otvoreneCustom.map(toRange);
+        rawSlots = rawSlots.concat(slotsFromRanges(otvoreneRanges));
+
+        // ROZŠÍRENÉ pridáva čas NAVYŠE k OTVORENÉ - časť, ktorá sa s ním prekrýva, je už zarátaná
+        // vyššie, takže tu spracujeme len tie kusy, čo ležia mimo OTVORENÉ rozsahu.
+        rozsireneCustom.forEach(r => {
+            const zvysne = subtractRanges(toRange(r), otvoreneRanges);
+            rawSlots = rawSlots.concat(slotsFromRanges(zvysne));
         });
     } else {
         // Ak NEMA vlastne otvorene, pouzijeme BEŽNÉ hodiny
         let dayOfWeek = getIsoDayOfWeek(dateStr);
 
         const rozpisNaDnes = globalData.defaultHours.find(h => h.den === dayOfWeek);
+        const defRanges = (rozpisNaDnes && rozpisNaDnes.bloky) ? rozpisNaDnes.bloky.map(toRange) : [];
 
-        if (rozpisNaDnes && rozpisNaDnes.bloky && rozpisNaDnes.bloky.length > 0) {
-            rozpisNaDnes.bloky.forEach(blok => {
-                let start = casNaMinuty(blok.od);
-                let koniec = casNaMinuty(blok.do);
-                if (koniec < start) koniec += 24 * 60; 
-                while (start + 90 <= koniec) {
-                    rawSlots.push(start);
-                    start += 90;
-                }
-            });
-        }
-        
-        // ... a k bežným hodinám PRIDÁME "ROZŠÍRENÉ" bloky
-        if (rozsireneCustom.length > 0) {
-            rozsireneCustom.forEach(r => {
-                let start = casNaMinuty(r.od);
-                let koniec = casNaMinuty(r.do);
-                if (koniec < start) koniec += 24 * 60; 
-                while (start + 90 <= koniec) {
-                    rawSlots.push(start);
-                    start += 90;
-                }
-            });
-        }
+        rawSlots = rawSlots.concat(slotsFromRanges(defRanges));
+
+        // ROZŠÍRENÉ pridáva čas NAVYŠE k bežným hodinám - časť, ktorá sa s nimi prekrýva, je už
+        // zarátaná vyššie, takže tu spracujeme len tie kusy rozsahu, čo ležia mimo bežných hodín.
+        rozsireneCustom.forEach(r => {
+            const zvysne = subtractRanges(toRange(r), defRanges);
+            rawSlots = rawSlots.concat(slotsFromRanges(zvysne));
+        });
     }
 
     // --- APLIKÁCIA "ZAVRETÉ" (Tvoja pôvodná a fungujúca logika) ---

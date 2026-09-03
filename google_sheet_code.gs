@@ -1,10 +1,14 @@
+// Poznatky:
+// - ak sa nasadzuje upravena verzia kodu, vlozit novy kod, ulozit (ctrl+s), staci kliknut na manage deployments, 
+//   tam kliknut na ceruzku, v prvom dropdowne kliknut na new version a nasledne pridat popis (volitelne) a dat save/deploy
+
 // TODO (resp. napady na rozsirenie):
 // - moznost zmenit termin (zakaznik) (FUH, MAXIMALNE SA MI ZATIAL NECHCE)
 
 const SHEET_NAME = 'Rezervácie';
 const SHEET_CUSTOM = 'Otv. hodiny mimo bežné';
 const SHEET_DEFAULT = 'Bežné otv. hodiny';
-const MOJ_EMAIL = 'roman.gurka@gmail.com';
+const MOJ_EMAIL = 'matusjacko1@gmail.com';
 
 // --- VALIDÁCIA VSTUPU ---
 // doPost je verejné API (URL je vidieť v script.js), takže klientská validácia v prehliadači sa dá
@@ -155,10 +159,18 @@ function skontrolujKvotu() {
 }
 
 function updateWebAppUrl() {
-  const url = ScriptApp.getService().getUrl();
-  // Uložíme to len ak adresa vyzerá ako ostré nasadenie (obsahuje /exec)
-  if (url && url.indexOf('/exec') !== -1) {
-    PropertiesService.getScriptProperties().setProperty('WEB_APP_URL', url);
+  // Volá sa na začiatku doPost/doGet MIMO ich try/catch - keby tu niečo hodilo chybu (napr. dočasný
+  // výpadok PropertiesService), celý request by spadol a namiesto JSON-u by prišla HTML chybová stránka.
+  // Preto si chybu ticho zalogujeme a ideme ďalej - toto je len pomocná "housekeeping" funkcia,
+  // nesmie zablokovať skutočnú odpoveď pre zákazníka.
+  try {
+    const url = ScriptApp.getService().getUrl();
+    // Uložíme to len ak adresa vyzerá ako ostré nasadenie (obsahuje /exec)
+    if (url && url.indexOf('/exec') !== -1) {
+      PropertiesService.getScriptProperties().setProperty('WEB_APP_URL', url);
+    }
+  } catch (err) {
+    console.error('updateWebAppUrl zlyhalo (ignorujeme, nie je to kritické):', err);
   }
 }
 
@@ -246,6 +258,38 @@ function formatToGridEnd(timeStr) {
 }
 
 // NOVÁ FUNKCIA: Presný výpočet mriežky na pozadí (Zjednotené s webom)
+// Odpočíta z rozsahu `range` ({start,end} v minútach) všetky rozsahy z poľa `occupied`
+// a vráti zvyšné (neprekrývajúce sa) kusy. Používa sa na to, aby ROZŠÍRENÉ generovalo sloty
+// len z toho, čo bežné/OTVORENÉ hodiny ešte nepokrývajú (inak by pri prekryve s iným rastrom
+// vznikli poprehadzované/preskočené okná).
+function subtractRanges(range, occupied) {
+  let pieces = [range];
+  occupied.forEach(o => {
+    let next = [];
+    pieces.forEach(p => {
+      if (o.end <= p.start || o.start >= p.end) { next.push(p); return; }
+      if (o.start > p.start) next.push({ start: p.start, end: Math.min(o.start, p.end) });
+      if (o.end < p.end) next.push({ start: Math.max(o.end, p.start), end: p.end });
+    });
+    pieces = next;
+  });
+  return pieces.filter(p => p.end > p.start);
+}
+
+// Poskladá 90-minútové sloty z poľa rozsahov {start,end}, každý rozsah od svojho vlastného začiatku.
+function slotsFromRanges(ranges) {
+  let out = [];
+  ranges.forEach(r => {
+    let start = r.start;
+    while (start + 90 <= r.end) { out.push(start); start += 90; }
+  });
+  return out;
+}
+
+function toRange(r) {
+  return { start: r.odMin, end: r.doMin < r.odMin ? r.doMin + 1440 : r.doMin };
+}
+
 function getValidSlotsForDay(targetYMD, customRules, defaultHoursMap) {
   let slots = [];
   let pravidlaPreDen = customRules.filter(r => r.datum === targetYMD);
@@ -254,35 +298,27 @@ function getValidSlotsForDay(targetYMD, customRules, defaultHoursMap) {
   let zavrete = pravidlaPreDen.filter(r => r.stav === 'ZAVRETÉ');
 
   if (otvorene.length > 0) {
-    let vsetkyOtvorene = [...otvorene, ...rozsirene];
-    vsetkyOtvorene.forEach(r => {
-      let start = r.odMin;
-      let end = r.doMin < r.odMin ? r.doMin + 1440 : r.doMin;
-      while (start + 90 <= end) {
-        slots.push(start);
-        start += 90;
-      }
+    let otvoreneRanges = otvorene.map(toRange);
+    slots = slots.concat(slotsFromRanges(otvoreneRanges));
+
+    // ROZŠÍRENÉ pridáva čas NAVYŠE k OTVORENÉ - časť, ktorá sa s ním prekrýva, je už zarátaná
+    // vyššie, takže tu spracujeme len tie kusy, čo ležia mimo OTVORENÉ rozsahu.
+    rozsirene.forEach(r => {
+      let zvysne = subtractRanges(toRange(r), otvoreneRanges);
+      slots = slots.concat(slotsFromRanges(zvysne));
     });
   } else {
     let dayOfWeek = getIsoDayOfWeek(targetYMD);
     let defBloky = defaultHoursMap[dayOfWeek] || [];
+    let defRanges = defBloky.map(toRange);
 
-    defBloky.forEach(r => {
-      let start = r.odMin;
-      let end = r.doMin < r.odMin ? r.doMin + 1440 : r.doMin;
-      while (start + 90 <= end) {
-        slots.push(start);
-        start += 90;
-      }
-    });
+    slots = slots.concat(slotsFromRanges(defRanges));
 
+    // ROZŠÍRENÉ pridáva čas NAVYŠE k bežným hodinám - časť, ktorá sa s nimi prekrýva, je už
+    // zarátaná vyššie, takže tu spracujeme len tie kusy rozsahu, čo ležia mimo bežných hodín.
     rozsirene.forEach(r => {
-      let start = r.odMin;
-      let end = r.doMin < r.odMin ? r.doMin + 1440 : r.doMin;
-      while (start + 90 <= end) {
-        slots.push(start);
-        start += 90;
-      }
+      let zvysne = subtractRanges(toRange(r), defRanges);
+      slots = slots.concat(slotsFromRanges(zvysne));
     });
   }
 
