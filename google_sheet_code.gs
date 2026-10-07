@@ -175,11 +175,16 @@ function updateWebAppUrl() {
 }
 
 // --- POMOCNÉ FUNKCIE PRE DÁTUMY A ZAOKRÚHĽOVANIE ---
+// Bezpečnostný strop na počet dní, ktoré vieme "rozbaliť" z jedného rozsahu (cca 3 roky).
+// Bez neho by preklep v dátume (napr. zlý rok) mohol nechať skript behať deň po dni cez
+// tisícky dní a presne to spôsobilo "Exceeded maximum execution time" pri checkUpcomingConflicts.
+const MAX_EXPAND_DNI = 1100;
+
 function expandDates(dateInput) {
   let results = [];
   if (!dateInput) return results;
   let parts = String(dateInput).split(',');
-  
+
   parts.forEach(part => {
     part = part.trim();
     if (part.includes('-')) {
@@ -189,9 +194,14 @@ function expandDates(dateInput) {
         let end = parseSlovakDate(rangeParts[1]);
         if (start && end) {
           let current = new Date(start);
-          while (current <= end) {
+          let pocet = 0;
+          while (current <= end && pocet < MAX_EXPAND_DNI) {
             results.push(`${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}-${String(current.getDate()).padStart(2, '0')}`);
             current.setDate(current.getDate() + 1);
+            pocet++;
+          }
+          if (pocet >= MAX_EXPAND_DNI) {
+            console.error('expandDates: rozsah "' + part + '" je podozrivo široký (' + MAX_EXPAND_DNI + '+ dní) - skontroluj, či v hárku "Otv. hodiny mimo bežné" nie je preklep v dátume.');
           }
         }
       }
@@ -203,6 +213,32 @@ function expandDates(dateInput) {
     }
   });
   return results;
+}
+
+// Rýchla kontrola "je targetYMD súčasťou tohto zadania dátumov?" BEZ toho, aby sa musel celý
+// rozsah rozbaliť deň po dni - stačia 2 porovnania na riadok, nezávisle od šírky rozsahu.
+// Používa checkUpcomingConflicts, kde nás aj tak zaujímajú len 2 konkrétne dni (dnes/zajtra).
+function dateInInput(targetYMD, dateInput) {
+  if (!dateInput) return false;
+  const targetParts = String(targetYMD).split('-').map(Number);
+  const target = new Date(targetParts[0], targetParts[1] - 1, targetParts[2]).getTime();
+
+  let parts = String(dateInput).split(',');
+  for (let i = 0; i < parts.length; i++) {
+    let part = parts[i].trim();
+    if (part.includes('-')) {
+      let rangeParts = part.split('-').map(p => p.trim());
+      if (rangeParts.length === 2) {
+        let start = parseSlovakDate(rangeParts[0]);
+        let end = parseSlovakDate(rangeParts[1]);
+        if (start && end && target >= start.getTime() && target <= end.getTime()) return true;
+      }
+    } else {
+      let d = parseSlovakDate(part);
+      if (d && d.getTime() === target) return true;
+    }
+  }
+  return false;
 }
 
 function parseSlovakDate(str) {
@@ -829,14 +865,15 @@ function checkUpcomingConflicts() {
       
       if (rDatum && rOd && rDo && rStav) {
         if (rStav !== 'ZAVRETÉ') { rOd = formatToGridStart(rOd); rDo = formatToGridEnd(rDo); }
-        
-        let expanded = expandDates(rDatum);
-        expanded.forEach(d => { 
-          // Ukladáme IBA pravidlá pre dnešok a zajtrajšok! Zvyšok ignorujeme.
-          if (d === todayYMD || d === tomorrowYMD) {
-            customRules.push({ datum: d, odMin: parseTime(rOd), doMin: parseTime(rDo), stav: rStav }); 
-          }
-        });
+
+        // Namiesto rozbaľovania celého rozsahu deň po dni (čo pri širokom/preklepnutom rozsahu
+        // spôsobilo "Exceeded maximum execution time") len rovno overíme, či je v ňom dnešok/zajtrajšok.
+        if (dateInInput(todayYMD, rDatum)) {
+          customRules.push({ datum: todayYMD, odMin: parseTime(rOd), doMin: parseTime(rDo), stav: rStav });
+        }
+        if (dateInInput(tomorrowYMD, rDatum)) {
+          customRules.push({ datum: tomorrowYMD, odMin: parseTime(rOd), doMin: parseTime(rDo), stav: rStav });
+        }
       }
     }
 

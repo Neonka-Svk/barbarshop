@@ -1,6 +1,6 @@
 // TODO: dalo by sa to refaktornut ngl xdd
 
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzQyJbBAKbE6doPZOgNCcIDiUnsU70AZ_WhMULilehSN4VEN-5i8fHM_t39KUTvMCoq/exec';
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby_CteYfl-EGWSIVmhllNkolqYH_25pL7WXh6SbH6PfQ49muOR33QErWWy8berXUxgkog/exec';
 let currentWeekOffset = 0;
 let globalData = { bookings: [], custom: [], defaultHours: [] };
 
