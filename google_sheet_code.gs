@@ -9,6 +9,7 @@ const SHEET_NAME = 'Rezervácie';
 const SHEET_CUSTOM = 'Otv. hodiny mimo bežné';
 const SHEET_DEFAULT = 'Bežné otv. hodiny';
 const MOJ_EMAIL = 'matusjacko1@gmail.com';
+const MAIL_NAZOV = 'Barbar Shop'; // meno odosielateľa, ktoré uvidia príjemcovia vo svojej schránke
 
 // --- VALIDÁCIA VSTUPU ---
 // doPost je verejné API (URL je vidieť v script.js), takže klientská validácia v prehliadači sa dá
@@ -481,7 +482,7 @@ function doPost(e) {
     sablonaKlient.vyzvaText = "V prípade, že si o tento termín nežiadal alebo ho chceš zrušiť, klikni na tlačidlo nižšie:";
     sablonaKlient.jeHolic = false;
 
-    MailApp.sendEmail({
+    MailApp.sendEmail({ name: MAIL_NAZOV,
       to: email,
       subject: `Barbar Shop - Potvrdenie rezervácie (${slovakDate} o ${data.cas})`,
       htmlBody: sablonaKlient.evaluate().getContent()
@@ -501,7 +502,7 @@ function doPost(e) {
     sablonaHolic.vyzvaText = "Ak potrebuješ tento termín zrušiť z prevádzkových alebo iných dôvodov, klikni nižšie na tlačidlo:";
     sablonaHolic.jeHolic = true;
 
-    MailApp.sendEmail({
+    MailApp.sendEmail({ name: MAIL_NAZOV,
       to: MOJ_EMAIL,
       subject: `Nová rezervácia: ${meno} (${slovakDate})`,
       htmlBody: sablonaHolic.evaluate().getContent()
@@ -565,15 +566,15 @@ function doGet(e) {
           if (role === 'holic') {
             const subject = "⚠️ Zrušenie rezervácie - Barbar Shop";
             const bodyHtml = generateCancellationEmailHtml(meno, dStr, cas, dovodInput, true);
-            MailApp.sendEmail({ to: email, subject: subject, htmlBody: bodyHtml });
+            MailApp.sendEmail({ name: MAIL_NAZOV, to: email, subject: subject, htmlBody: bodyHtml });
           } else {
             const subjectHolic = `❌ Zrušený termín: ${meno}`;
             const bodyHtmlHolic = generateCancellationEmailHtml(meno, dStr, cas, dovodInput, false);
-            MailApp.sendEmail({ to: MOJ_EMAIL, subject: subjectHolic, htmlBody: bodyHtmlHolic });
+            MailApp.sendEmail({ name: MAIL_NAZOV, to: MOJ_EMAIL, subject: subjectHolic, htmlBody: bodyHtmlHolic });
 
             const subjectKlient = "Potvrdenie zrušenia termínu";
             const bodyHtmlKlient = generateCancellationEmailHtml(meno, dStr, cas, dovodInput, true, true);
-            MailApp.sendEmail({ to: email, subject: subjectKlient, htmlBody: bodyHtmlKlient });
+            MailApp.sendEmail({ name: MAIL_NAZOV, to: email, subject: subjectKlient, htmlBody: bodyHtmlKlient });
           }
         } catch(err) {
           console.error('Zlyhalo odoslanie e-mailu pri zrušení (executeCancel):', err);
@@ -779,7 +780,7 @@ function handleEdit(e) {
        
        try { 
          const bodyHtml = generateCancellationEmailHtml(data[3], data[0], data[1].replace(/^'/, ''), dovod, true);
-         MailApp.sendEmail({ 
+         MailApp.sendEmail({ name: MAIL_NAZOV, 
            to: data[5], 
            subject: "⚠️ Zrušenie rezervácie - Barbar Shop", 
            htmlBody: bodyHtml
@@ -893,7 +894,7 @@ function processCancellations(cancellations, nonce) {
       // Údaje (meno, e-mail, termín) berieme priamo z tabuľky, nie z toho, čo prišlo z dialógu.
       const r = sheet.getRange(c.row, 1, 1, 8).getDisplayValues()[0];
       const bodyHtml = generateCancellationEmailHtml(r[3], r[0], String(r[1]).replace(/^'/, ''), c.dovod, true);
-      MailApp.sendEmail({
+      MailApp.sendEmail({ name: MAIL_NAZOV,
         to: r[5],
         subject: "⚠️ Zrušenie rezervácie - Barbar Shop",
         htmlBody: bodyHtml
@@ -1077,7 +1078,7 @@ function submitReview(payload) {
       const approveUrl = baseUrl + '?action=approveReview&id=' + id + '&t=' + reviewToken_(id, 'approve');
       const deleteUrl = baseUrl + '?action=deleteReview&id=' + id + '&t=' + reviewToken_(id, 'delete');
       const sheetUrl = ss.getUrl() + '#gid=' + getReviewSheet_().getSheetId();
-      MailApp.sendEmail({
+      MailApp.sendEmail({ name: MAIL_NAZOV,
         to: MOJ_EMAIL,
         subject: 'Nová recenzia čaká na schválenie (' + stars + '/5)',
         htmlBody: generateNewReviewEmailHtml_(name, stars, text, approveUrl, deleteUrl, sheetUrl)
@@ -1320,7 +1321,7 @@ function sendReviewRequests() {
       if (MailApp.getRemainingDailyQuota() < 20) break;
 
       try {
-        MailApp.sendEmail({
+        MailApp.sendEmail({ name: MAIL_NAZOV,
           to: email,
           subject: 'Ako sa ti páčil strih? - Barbar Shop',
           htmlBody: generateReviewEmailHtml_(data[i][3], data[i][0], baseUrl + '?action=reviewPage&id=' + id)
@@ -1556,7 +1557,7 @@ function checkUpcomingConflicts() {
 
           const bodyHtml = generateReminderEmailHtml(meno, casString, Math.round(timeDiff), dovodText, resId, baseUrl);
           
-          MailApp.sendEmail({ 
+          MailApp.sendEmail({ name: MAIL_NAZOV, 
             to: MOJ_EMAIL, 
             subject: isEarlyMorningTomorrow ? `🌙 VEČERNÁ HLIADKA: Ranný konflikt!` : `⏰ BUDÍČEK: Zblúdilý bojovník na ceste!`, 
             htmlBody: bodyHtml 
