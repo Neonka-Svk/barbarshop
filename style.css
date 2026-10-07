@@ -889,3 +889,23 @@ main {
 .review-reply strong {
     color: var(--gold);
 }
+
+/* odkaz v pätičke (Ochrana osobných údajov) */
+footer a {
+    color: var(--gold);
+}
+
+footer a:hover {
+    text-decoration: underline;
+}
+
+/* kostra kariet počas prvého načítania recenzií */
+.review-skeleton {
+    min-height: 110px;
+    animation: review-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes review-pulse {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 0.8; }
+}

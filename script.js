@@ -258,14 +258,64 @@ function getProcessedSlotsForDate(targetDateStr) {
     return processedSlots.sort((a, b) => a.startMin - b.startMin);
 }
 
-// --- RECENZIE: načítajú sa až po kalendári, bez čakania (rezervácia sa tým nespomalí) ---
+// --- RECENZIE ---
+// Načítavajú sa súbežne s kalendárom. Aby sekcia nevyskočila "z ničoho" až po dlhšej chvíli:
+//  - pri ďalších návštevách sa hneď ukáže posledná známa verzia (uložená v prehliadači) a v pozadí sa obnoví,
+//  - pri úplne prvej návšteve sa počas načítania ukáže kostra kariet.
+const REVIEWS_CACHE_KEY = 'barbarshop_reviews_v1';
+
+function readReviewsCache() {
+    try {
+        const raw = localStorage.getItem(REVIEWS_CACHE_KEY);
+        return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function writeReviewsCache(data) {
+    try {
+        localStorage.setItem(REVIEWS_CACHE_KEY, JSON.stringify(data));
+    } catch (e) { /* súkromný režim / plné úložisko - nevadí, len sa nebude cachovať */ }
+}
+
+function showReviewsSkeleton() {
+    const section = document.getElementById('reviews-section');
+    const list = document.getElementById('reviews-list');
+    if (!section || !list) return;
+    document.getElementById('reviews-summary').textContent = '';
+    list.innerHTML = '';
+    for (let i = 0; i < 3; i++) {
+        const card = document.createElement('div');
+        card.className = 'review-card review-skeleton';
+        list.appendChild(card);
+    }
+    section.hidden = false;
+}
+
+function hideReviews() {
+    const section = document.getElementById('reviews-section');
+    if (section) section.hidden = true;
+}
+
 async function loadReviews() {
+    const cached = readReviewsCache();
+    if (cached && Array.isArray(cached.reviews) && cached.reviews.length > 0) {
+        renderReviews(cached);
+    } else if (!cached) {
+        showReviewsSkeleton();
+    }
+
     try {
         const response = await fetch(SCRIPT_URL + '?action=reviews');
-        if (!response.ok) return;
-        renderReviews(await response.json());
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const data = await response.json();
+        if (!data || !Array.isArray(data.reviews)) throw new Error('Neočakávaná odpoveď');
+        writeReviewsCache(data);
+        renderReviews(data);
     } catch (e) {
         console.error('Chyba pri načítaní recenzií', e);
+        if (!cached) hideReviews();
     }
 }
 
@@ -273,7 +323,11 @@ function renderReviews(data) {
     const section = document.getElementById('reviews-section');
     const list = document.getElementById('reviews-list');
     const summary = document.getElementById('reviews-summary');
-    if (!section || !data || !Array.isArray(data.reviews) || data.reviews.length === 0) return;
+    if (!section) return;
+    if (!data || !Array.isArray(data.reviews) || data.reviews.length === 0) {
+        hideReviews();
+        return;
+    }
 
     const starsText = (n) => '★'.repeat(n) + '☆'.repeat(5 - n);
     const makeEl = (tag, className, text) => {
@@ -305,8 +359,8 @@ function renderReviews(data) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+    loadReviews(); // bez await: beží súbežne s načítaním kalendára
     await refreshData();
-    loadReviews();
 
     // Navigácia týždňov
     document.getElementById('nextWeek').addEventListener('click', () => {

@@ -672,6 +672,12 @@ function doGet(e) {
   if (action === 'doApproveReview') {
     return doApproveReview_(id, e.parameter.t, e.parameter.odpoved);
   }
+  if (action === 'deleteReview') {
+    return showDeleteReviewPage_(id, e.parameter.t);
+  }
+  if (action === 'doDeleteReview') {
+    return doDeleteReview_(id, e.parameter.t);
+  }
 
   // --- AKCIA 3c: SCHVÁLENÉ RECENZIE PRE WEB ---
   if (action === 'reviews') {
@@ -781,6 +787,23 @@ function handleEdit(e) {
     return;
   }
 
+  // 1b. Zmazanie recenzie cez CHECKBOX v hárku "Recenzie" (posledný stĺpec)
+  if (sheetName === SHEET_RECENZIE && e.range.getColumn() === RECENZIE_HLAVICKA.length && e.range.getRow() > 1 && e.range.getValue() === true) {
+    const ui = SpreadsheetApp.getUi();
+    const r = sheet.getRange(e.range.getRow(), 1, 1, RECENZIE_HLAVICKA.length).getValues()[0];
+    const odpoved = ui.alert(
+      'Zmazať recenziu?',
+      'Recenzia od "' + r[4] + '" (' + r[2] + '/5) sa nenávratne odstráni z tabuľky aj z webu. Pokračovať?',
+      ui.ButtonSet.YES_NO
+    );
+    if (odpoved === ui.Button.YES) {
+      sheet.deleteRow(e.range.getRow());
+    } else {
+      e.range.setValue(false);
+    }
+    return;
+  }
+
   // 2. Kontrola konfliktov (Aktivuje sa zmenou v Otváracích hodinách)
   if (sheetName === SHEET_CUSTOM && e.range.getColumn() <= 4) {
     let row = e.range.getRow();
@@ -880,7 +903,7 @@ function processCancellations(cancellations, nonce) {
 // odklikne (stĺpec "Schválené") -> riadok sa objaví na webe (?action=reviews).
 // Jedna rezervácia = najviac jedna recenzia; rezervácia sa hľadá v "Rezervácie" aj v "Archív".
 const SHEET_RECENZIE = 'Recenzie';
-const RECENZIE_HLAVICKA = ['Identifikátor rezervácie', 'Dátum strihania', 'Hodnotenie (1-5)', 'Recenzia', 'Zobrazené meno', 'Odoslané (súhlas so zverejnením)', 'Schválené', 'Odpoveď holiča'];
+const RECENZIE_HLAVICKA = ['Identifikátor rezervácie', 'Dátum strihania', 'Hodnotenie (1-5)', 'Recenzia', 'Zobrazené meno', 'Odoslané (súhlas so zverejnením)', 'Schválené', 'Odpoveď holiča', 'Zmazať recenziu?'];
 const REVIEW_PLATNOST_DNI = 30;
 const REVIEW_MAX_ZOBRAZENYCH = 12;
 const REVIEW_STLPEC_MAILU = 10; // J v hárku Rezervácie: označí, že mail s recenziou už odišiel
@@ -905,7 +928,17 @@ function getReviewSheet_() {
     sheet.setFrozenRows(1);
     try { ss.setActiveSheet(povodny); } catch (err) {}
   }
+  upgradeReviewSheet_(sheet);
   return sheet;
+}
+
+// Starší hárok "Recenzie" (ešte bez stĺpca "Zmazať recenziu?") sa sám doplní o hlavičku a checkboxy.
+function upgradeReviewSheet_(sheet) {
+  const stlpec = RECENZIE_HLAVICKA.length;
+  if (sheet.getRange(1, stlpec).getValue()) return;
+  sheet.getRange(1, stlpec).setValue(RECENZIE_HLAVICKA[stlpec - 1]);
+  sheet.getRange(1, stlpec - 1).copyFormatToRange(sheet, stlpec, stlpec, 1, 1);
+  if (sheet.getLastRow() > 1) sheet.getRange(2, stlpec, sheet.getLastRow() - 1, 1).insertCheckboxes();
 }
 
 function slovakDateToYMD_(str) {
@@ -1009,7 +1042,8 @@ function submitReview(payload) {
         safeCell(name),
         Utilities.formatDate(new Date(), 'Europe/Bratislava', 'd.M.yyyy HH:mm:ss'),
         false,
-        ''
+        '',
+        false
       ];
       // Najnovšia recenzia hore (hneď pod hlavičkou), nech si na nové a neodpovedané nezabudneš.
       let cielovyRiadok;
@@ -1023,18 +1057,21 @@ function submitReview(payload) {
         cielovyRiadok = 2;
       }
       sheet.getRange(cielovyRiadok, 7).insertCheckboxes();
+      sheet.getRange(cielovyRiadok, 9).insertCheckboxes();
     } finally {
       lock.releaseLock();
     }
 
     try {
       const ss = SpreadsheetApp.getActiveSpreadsheet();
-      const approveUrl = ScriptApp.getService().getUrl() + '?action=approveReview&id=' + id + '&t=' + reviewApprovalToken_(id);
+      const baseUrl = ScriptApp.getService().getUrl();
+      const approveUrl = baseUrl + '?action=approveReview&id=' + id + '&t=' + reviewToken_(id, 'approve');
+      const deleteUrl = baseUrl + '?action=deleteReview&id=' + id + '&t=' + reviewToken_(id, 'delete');
       const sheetUrl = ss.getUrl() + '#gid=' + getReviewSheet_().getSheetId();
       MailApp.sendEmail({
         to: MOJ_EMAIL,
         subject: 'Nová recenzia čaká na schválenie (' + stars + '/5)',
-        htmlBody: generateNewReviewEmailHtml_(name, stars, text, approveUrl, sheetUrl)
+        htmlBody: generateNewReviewEmailHtml_(name, stars, text, approveUrl, deleteUrl, sheetUrl)
       });
     } catch (err) {
       console.error('Upozornenie na novú recenziu sa neodoslalo:', err);
@@ -1048,15 +1085,20 @@ function submitReview(payload) {
 
 // Podpis odkazu na schválenie. Samotné ID recenzie nestačí (pozná ho aj zákazník zo svojho odkazu na
 // recenziu), preto sa odkaz podpisuje tajným kľúčom, ktorý zná len skript.
-function reviewApprovalToken_(id) {
+// Každá akcia (approve / delete) má vlastný podpis, takže odkaz na schválenie nemožno použiť na zmazanie.
+function reviewToken_(id, purpose) {
   const props = PropertiesService.getScriptProperties();
   let secret = props.getProperty('REVIEW_SECRET');
   if (!secret) {
     secret = Utilities.getUuid() + Utilities.getUuid();
     props.setProperty('REVIEW_SECRET', secret);
   }
-  const sig = Utilities.computeHmacSha256Signature(id + '|approve', secret);
+  const sig = Utilities.computeHmacSha256Signature(id + '|' + purpose, secret);
   return Utilities.base64EncodeWebSafe(sig).replace(/=+$/, '').slice(0, 32);
+}
+
+function reviewApprovalToken_(id) {
+  return reviewToken_(id, 'approve');
 }
 
 // Vráti {row, id, stars, text, name, approved, reply} alebo null.
@@ -1134,13 +1176,43 @@ function doApproveReview_(id, token, odpoved) {
   return reviewAdminPage_('Hotovo', '<div class="ok">&#10003;</div><p style="text-align:center">Recenzia je schválená a na webe sa zobrazí do pár minút. Môžeš zatvoriť túto stránku.</p>');
 }
 
-function generateNewReviewEmailHtml_(name, stars, text, approveUrl, sheetUrl) {
+// Zmazanie recenzie, krok 1: náhľad a potvrdenie (nič sa nemaže, kým sa nepotvrdí).
+function showDeleteReviewPage_(id, token) {
+  if (!id || token !== reviewToken_(id, 'delete')) return reviewAdminPage_('Neplatný odkaz', '<p>Tento odkaz na zmazanie nie je platný.</p>');
+  const r = findReview_(id);
+  if (!r) return reviewAdminPage_('Recenzia sa nenašla', '<p>Recenzia už neexistuje (možno už bola zmazaná).</p>');
+  return reviewAdminPage_('Zmazať recenziu?',
+    starsHtml_(r.stars) +
+    '<div class="quote">' + escapeHtml(r.text) + '</div>' +
+    '<div class="who">Od: <strong>' + escapeHtml(r.name) + '</strong>' + (r.approved ? ' (zatiaľ zverejnená na webe)' : '') + '</div>' +
+    '<p style="text-align:center;color:#ff8a80">Recenzia sa nenávratne odstráni z tabuľky aj z webu.</p>' +
+    '<form method="GET" action="' + escapeHtml(ScriptApp.getService().getUrl()) + '" target="_top">' +
+    '<input type="hidden" name="action" value="doDeleteReview"><input type="hidden" name="id" value="' + escapeHtml(id) + '"><input type="hidden" name="t" value="' + escapeHtml(token) + '">' +
+    '<button type="submit" class="btn" style="background:#d32f2f">ZMAZAŤ NAVŽDY</button></form>');
+}
+
+// Krok 2: skutočné zmazanie riadku.
+function doDeleteReview_(id, token) {
+  if (!id || token !== reviewToken_(id, 'delete')) return reviewAdminPage_('Neplatný odkaz', '<p>Tento odkaz na zmazanie nie je platný.</p>');
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) return reviewAdminPage_('Skús znova', '<p>Server je práve vyťažený, skús to o chvíľu.</p>');
+  try {
+    const r = findReview_(id);
+    if (!r) return reviewAdminPage_('Recenzia sa nenašla', '<p>Recenzia už neexistuje.</p>');
+    getReviewSheet_().deleteRow(r.row);
+  } finally {
+    lock.releaseLock();
+  }
+  return reviewAdminPage_('Zmazané', '<div class="ok">&#10003;</div><p style="text-align:center">Recenzia bola odstránená. Môžeš zatvoriť túto stránku.</p>');
+}
+
+function generateNewReviewEmailHtml_(name, stars, text, approveUrl, deleteUrl, sheetUrl) {
   let hviezdy = '';
   for (let i = 1; i <= 5; i++) {
     hviezdy += '<span style="color:' + (i <= stars ? '#f0c419' : '#d8d8d8') + ';">&#9733;</span>';
   }
   const btn = function(href, label, bg, color) {
-    return '<a href="' + href + '" target="_blank" style="display:inline-block;margin:6px;padding:14px 26px;background-color:' + bg + ';color:' + color + ';font-family:Arial,sans-serif;font-size:15px;font-weight:bold;text-decoration:none;border-radius:6px;">' + label + '</a>';
+    return '<a href="' + href + '" target="_blank" style="display:inline-block;margin:6px;padding:14px 22px;background-color:' + bg + ';color:' + color + ';font-family:Arial,sans-serif;font-size:14px;font-weight:bold;text-decoration:none;border-radius:6px;">' + label + '</a>';
   };
   return '<!DOCTYPE html><html lang="sk"><head><meta charset="UTF-8"></head><body style="margin:0;padding:0;background-color:#f4f4f5;font-family:Arial,sans-serif;">' +
     '<table border="0" cellpadding="0" cellspacing="0" width="100%" style="padding:20px 0;"><tr><td align="center">' +
@@ -1154,10 +1226,11 @@ function generateNewReviewEmailHtml_(name, stars, text, approveUrl, sheetUrl) {
     '<table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color:#fafafa;border:1px solid #eaeaea;border-left:4px solid #f0c419;border-radius:8px;border-collapse:separate;"><tr><td style="padding:18px 20px;color:#1a1a1a;font-size:16px;line-height:1.6;">' +
     escapeHtml(text).replace(/\n/g, '<br>') + '</td></tr></table>' +
     '<div style="text-align:center;margin-top:28px;">' +
-    btn(approveUrl, 'SCHVÁLIŤ RECENZIU', '#2e7d32', '#ffffff') +
+    btn(approveUrl, 'SCHVÁLIŤ', '#2e7d32', '#ffffff') +
+    btn(deleteUrl, 'ZMAZAŤ', '#d32f2f', '#ffffff') +
     btn(sheetUrl, 'OTVORIŤ TABUĽKU', '#1a1a1a', '#f0c419') +
     '</div>' +
-    '<p style="margin:22px 0 0 0;text-align:center;color:#888888;font-size:13px;">Po kliknutí na "Schváliť" uvidíš náhľad a môžeš pridať odpoveď. Nič sa nezverejní, kým to nepotvrdíš.</p>' +
+    '<p style="margin:22px 0 0 0;text-align:center;color:#888888;font-size:13px;">Po kliknutí na "Schváliť" alebo "Zmazať" uvidíš najprv náhľad a až potvrdením sa niečo vykoná.</p>' +
     '</td></tr>' +
     '<tr><td align="center" style="background-color:#f9f9f9;padding:22px;border-top:1px solid #eaeaea;font-size:12px;color:#999999;line-height:1.5;"><p style="margin:0;">Tento e-mail bol vygenerovaný automaticky systémom Barbar Shop. &copy; 2026 Barbar Shop. Sila a česť.</p></td></tr>' +
     '</table></td></tr></table></body></html>';
@@ -1265,6 +1338,14 @@ function onOpen() {
   SpreadsheetApp.getUi().createMenu('🛠️ Správa rezervácií')
     .addItem('Vymazať staré rezervácie (7+ dni)', 'cleanupOldReservations')
     .addToUi();
+
+  // Staršiemu hárku "Recenzie" doplní stĺpec "Zmazať recenziu?" (hlavička + checkboxy).
+  try {
+    const recenzie = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_RECENZIE);
+    if (recenzie) upgradeReviewSheet_(recenzie);
+  } catch (err) {
+    console.error('Úprava hárku Recenzie zlyhala:', err);
+  }
 }
 
 // --- ARCHÍV REZERVÁCIÍ ---
