@@ -748,7 +748,16 @@ function doGet(e) {
     }
   }
   
-  return ContentService.createTextOutput(JSON.stringify({ bookings, custom: customRanges, defaultHours }))
+  // Schválené recenzie idú v tej istej odpovedi ako kalendár: web tak vie hneď, či nejaké sú, a nemusí
+  // hádať (kostra, ktorá zmizne) ani používať uloženú kópiu (zmazaná recenzia by sa ešte ukázala).
+  let reviews = { count: 0, average: 0, reviews: [] };
+  try {
+    reviews = getPublicReviews_();
+  } catch (err) {
+    console.error('Načítanie recenzií zlyhalo (kalendár ide ďalej):', err);
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({ bookings, custom: customRanges, defaultHours, reviews }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 

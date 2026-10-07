@@ -259,64 +259,16 @@ function getProcessedSlotsForDate(targetDateStr) {
 }
 
 // --- RECENZIE ---
-// Načítavajú sa súbežne s kalendárom. Aby sekcia nevyskočila "z ničoho" až po dlhšej chvíli:
-//  - pri ďalších návštevách sa hneď ukáže posledná známa verzia (uložená v prehliadači) a v pozadí sa obnoví,
-//  - pri úplne prvej návšteve sa počas načítania ukáže kostra kariet.
-const REVIEWS_CACHE_KEY = 'barbarshop_reviews_v1';
-
-function readReviewsCache() {
-    try {
-        const raw = localStorage.getItem(REVIEWS_CACHE_KEY);
-        return raw ? JSON.parse(raw) : null;
-    } catch (e) {
-        return null;
-    }
-}
-
-function writeReviewsCache(data) {
-    try {
-        localStorage.setItem(REVIEWS_CACHE_KEY, JSON.stringify(data));
-    } catch (e) { /* súkromný režim / plné úložisko - nevadí, len sa nebude cachovať */ }
-}
-
-function showReviewsSkeleton() {
-    const section = document.getElementById('reviews-section');
-    const list = document.getElementById('reviews-list');
-    if (!section || !list) return;
-    document.getElementById('reviews-summary').textContent = '';
-    list.innerHTML = '';
-    for (let i = 0; i < 3; i++) {
-        const card = document.createElement('div');
-        card.className = 'review-card review-skeleton';
-        list.appendChild(card);
-    }
-    section.hidden = false;
-}
+// Schválené recenzie prichádzajú v tej istej odpovedi ako kalendár (globalData.reviews), takže sekcia
+// sa ukáže až s hotovými dátami: žiadna kostra, ktorá by po zistení "nič tu nie je" zmizla, a žiadna
+// uložená kópia, ktorá by ukazovala už zmazanú recenziu. Kým dáta nie sú, sekcia je skrytá.
+try { localStorage.removeItem('barbarshop_reviews_v1'); } catch (e) { /* staré uloženie z predošlej verzie, už ho nepoužívame */ }
 
 function hideReviews() {
     const section = document.getElementById('reviews-section');
+    const list = document.getElementById('reviews-list');
+    if (list) list.innerHTML = '';
     if (section) section.hidden = true;
-}
-
-async function loadReviews() {
-    const cached = readReviewsCache();
-    if (cached && Array.isArray(cached.reviews) && cached.reviews.length > 0) {
-        renderReviews(cached);
-    } else if (!cached) {
-        showReviewsSkeleton();
-    }
-
-    try {
-        const response = await fetch(SCRIPT_URL + '?action=reviews');
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        const data = await response.json();
-        if (!data || !Array.isArray(data.reviews)) throw new Error('Neočakávaná odpoveď');
-        writeReviewsCache(data);
-        renderReviews(data);
-    } catch (e) {
-        console.error('Chyba pri načítaní recenzií', e);
-        if (!cached) hideReviews();
-    }
 }
 
 function renderReviews(data) {
@@ -359,7 +311,6 @@ function renderReviews(data) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-    loadReviews(); // bez await: beží súbežne s načítaním kalendára
     await refreshData();
 
     // Navigácia týždňov
@@ -428,6 +379,7 @@ async function refreshData() {
         const response = await fetch(SCRIPT_URL);
         if (response.ok) {
             globalData = await response.json();
+            renderReviews(globalData.reviews);
         }
     } catch (e) {
         console.error('Chyba dát', e);

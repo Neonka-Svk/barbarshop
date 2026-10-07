@@ -899,13 +899,12 @@ footer a:hover {
     text-decoration: underline;
 }
 
-/* kostra kariet počas prvého načítania recenzií */
-.review-skeleton {
-    min-height: 110px;
-    animation: review-pulse 1.4s ease-in-out infinite;
+/* sekcia recenzií sa jemne objaví, keď prídu dáta (nie je skrytá a potom náhle "vyskočí") */
+.reviews-section:not([hidden]) {
+    animation: reviews-fade-in 0.4s ease;
 }
 
-@keyframes review-pulse {
-    0%, 100% { opacity: 0.35; }
-    50% { opacity: 0.8; }
+@keyframes reviews-fade-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
 }
