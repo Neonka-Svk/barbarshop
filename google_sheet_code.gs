@@ -21,6 +21,27 @@ const MIN_MINUT_VOPRED = 30;
 const RATE_LIMIT_SEKUND = 30;
 const DNI_MAPA = {'Pondelok':1,'Utorok':2,'Streda':3,'Štvrtok':4,'Piatok':5,'Sobota':6,'Nedeľa':7};
 
+// --- PÍSMO PRE STRÁNKY Z APPS SCRIPTU ---
+// Stránky zrušenia/detailu sa servírujú z domény Googlu, takže nevidia súbory z projektu - písmo
+// Roboto si preto berú z Vercelu (fonts/ v repozitári, CORS povolený vo vercel.json). Ak sa nenačíta,
+// ostane záložné systémové písmo, nič sa nerozbije.
+const FONT_BASE_URL = 'https://barbarshop-mu.vercel.app/fonts/';
+function fontFaceCss() {
+  const rozsahy = {
+    'latin': 'U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD',
+    'latin-ext': 'U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF'
+  };
+  let css = '';
+  [400, 700].forEach(function(w) {
+    Object.keys(rozsahy).forEach(function(subset) {
+      css += "@font-face{font-family:'Roboto';font-style:normal;font-weight:" + w + ";font-display:swap;" +
+             "src:url('" + FONT_BASE_URL + 'roboto-' + subset + '-' + w + "-normal.woff2') format('woff2');" +
+             'unicode-range:' + rozsahy[subset] + ';}';
+    });
+  });
+  return css;
+}
+
 function jsonOut(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
@@ -424,7 +445,7 @@ function doPost(e) {
         }
       }
 
-      sheet.appendRow([slovakDate, "'" + data.cas, new Date(), meno, sluzba, email, false, id]);
+      sheet.appendRow([slovakDate, "'" + data.cas, new Date(), safeCell(meno), sluzba, safeCell(email), false, id]);
 
       const lastRow = sheet.getLastRow();
       sheet.getRange(lastRow, 7).insertCheckboxes();
@@ -501,7 +522,7 @@ function doGet(e) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheetRez = ss.getSheetByName(SHEET_NAME);
   
-  const htmlStart = "<div style='font-family:Montserrat, sans-serif; background:#1a1a1a; color:#f0c419; height:100vh; display:flex; justify-content:center; align-items:center; text-align:center; margin:0;'><h2>";
+  const htmlStart = "<style>" + fontFaceCss() + "</style><div style='font-family:Roboto, Helvetica, Arial, sans-serif; background:#1a1a1a; color:#f0c419; height:100vh; display:flex; justify-content:center; align-items:center; text-align:center; margin:0;'><h2>";
   const htmlEnd = "</h2></div>";
 
   // --- AKCIA 1: ZOBRAZENIE STRÁNKY NA ZADANIE DÔVODU ---
@@ -516,6 +537,7 @@ function doGet(e) {
         template.datum = data[i][0]; 
         template.cas = data[i][1].replace(/^'/, '');
         template.scriptUrl = ScriptApp.getService().getUrl();
+        template.fontFaceCss = fontFaceCss();
         return template.evaluate().setTitle("Zrušenie rezervácie").addMetaTag('viewport', 'width=device-width, initial-scale=1');
       }
     }
@@ -535,6 +557,7 @@ function doGet(e) {
         let dStr = data[i][0];
         let cas = data[i][1].replace(/^'/, '');
         
+        archiveReservation(data[i], role === 'holic' ? 'Zrušil holič' : 'Zrušil zákazník', dovodInput);
         sheetRez.deleteRow(i + 1);
         termiZruseny = true;
         
@@ -570,9 +593,9 @@ function doGet(e) {
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Výsledok | Barbar Shop</title>
-        <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
         <style>
-          body { font-family: 'Montserrat', sans-serif; background-color: #1a1a1a; color: #e0e0e0; margin: 0; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+          ${fontFaceCss()}
+          body { font-family: 'Roboto', 'Segoe UI', Helvetica, Arial, sans-serif; background-color: #1a1a1a; color: #e0e0e0; margin: 0; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
           .card { background-color: #2b1d16; border: 1px solid #f0c419; border-radius: 12px; padding: 40px; max-width: 450px; width: 100%; box-shadow: 0 10px 30px rgba(0,0,0,0.5); text-align: center; }
           h2 { color: #f0c419; margin-top: 0; margin-bottom: 20px; }
           .success-icon { font-size: 60px; color: #4caf50; margin-bottom: 20px; }
@@ -707,7 +730,7 @@ function handleEdit(e) {
     if (prompt.getSelectedButton() === ui.Button.OK) {
        let dovod = prompt.getResponseText() || "Neočakávané prevádzkové dôvody.";
        let row = e.range.getRow();
-       let data = sheet.getRange(row, 1, 1, 6).getDisplayValues()[0]; 
+       let data = sheet.getRange(row, 1, 1, 8).getDisplayValues()[0];
        
        try { 
          const bodyHtml = generateCancellationEmailHtml(data[3], data[0], data[1].replace(/^'/, ''), dovod, true);
@@ -720,8 +743,9 @@ function handleEdit(e) {
          console.error('Zlyhalo odoslanie e-mailu pri zrušení (checkbox):', err);
        }
 
+       archiveReservation(data, 'Zrušil holič', dovod);
        sheet.deleteRow(row);
-    } else { 
+    } else {
        e.range.setValue(false); 
     }
     return;
@@ -799,9 +823,10 @@ function processCancellations(cancellations) {
         subject: "⚠️ Zrušenie rezervácie - Barbar Shop", 
         htmlBody: bodyHtml 
       });
+      archiveReservation(sheet.getRange(c.row, 1, 1, 8).getDisplayValues()[0], 'Zrušil holič', c.dovod);
       sheet.deleteRow(c.row);
-    } catch(err) { 
-      console.error("Nepodarilo sa zrušiť riadok:", c.row); 
+    } catch(err) {
+      console.error("Nepodarilo sa zrušiť riadok:", c.row);
     }
   });
 }
@@ -812,22 +837,105 @@ function onOpen() {
     .addToUi();
 }
 
+// --- ARCHÍV REZERVÁCIÍ ---
+// Každá rezervácia, ktorá zmizne z hárku "Rezervácie" (prebehla / zrušená), sa najprv skopíruje sem.
+// ID rezervácie ostáva v archíve navždy (budú sa podľa neho overovať aj recenzie), osobné údaje
+// (meno, e-mail) sa po ARCHIV_ANONYMIZOVAT_PO_MESIACOCH mesiacoch automaticky nahradia textom
+// "(anonymizované)". Číslo treba držať v súlade s textom na stránke privacy.html.
+const SHEET_ARCHIV = 'Archív';
+const ARCHIV_HLAVICKA = ['Dátum strihania', 'Objednaný čas', 'Čas objednávky', 'Meno', 'Služba', 'E-mail', 'Identifikátor rezervácie', 'Stav', 'Dôvod', 'Archivované'];
+const ARCHIV_ANONYMIZOVAT_PO_MESIACOCH = 24;
+const ARCHIV_ANONYMIZOVANE = '(anonymizované)';
+
+// Text začínajúci =, +, - alebo @ by Google Sheets pri zápise vyhodnotil ako vzorec (napr. meno
+// "=IMPORTDATA(...)" by vedelo poslať obsah tabuľky von). Predpísaný apostrof z toho spraví obyčajný text.
+function safeCell(value) {
+  const s = String(value == null ? '' : value);
+  return /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
+}
+
+function getArchiveSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_ARCHIV);
+  if (!sheet) {
+    const povodny = ss.getActiveSheet();
+    sheet = ss.insertSheet(SHEET_ARCHIV);
+    sheet.getRange(1, 1, 1, ARCHIV_HLAVICKA.length).setValues([ARCHIV_HLAVICKA]).setFontWeight('bold');
+    sheet.getRange(1, 1, sheet.getMaxRows(), 3).setNumberFormat('@'); // dátum a časy ako text, nech ich Sheets nepreklopí podľa lokality
+    sheet.setFrozenRows(1);
+    try { ss.setActiveSheet(povodny); } catch (err) {}
+  }
+  return sheet;
+}
+
+// row = riadok z hárku Rezervácie (A-H: dátum, čas, čas objednávky, meno, služba, e-mail, checkbox, ID).
+// Vráti true/false, aby sa dalo rozhodnúť, či riadok z Rezervácií zmazať.
+function archiveReservation(row, stav, dovod) {
+  try {
+    getArchiveSheet().appendRow([
+      row[0],
+      String(row[1]).replace(/^'/, ''),
+      row[2],
+      safeCell(row[3]),
+      safeCell(row[4]),
+      safeCell(row[5]),
+      row[7] || '',
+      stav,
+      safeCell(dovod),
+      Utilities.formatDate(new Date(), 'Europe/Bratislava', 'd.M.yyyy HH:mm:ss')
+    ]);
+    return true;
+  } catch (err) {
+    console.error('Archivácia rezervácie zlyhala:', err);
+    return false;
+  }
+}
+
+function anonymizeOldArchive() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_ARCHIV);
+  if (!sheet || sheet.getLastRow() < 2) return;
+
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, ARCHIV_HLAVICKA.length).getDisplayValues();
+  const hranica = new Date();
+  hranica.setHours(0, 0, 0, 0);
+  hranica.setMonth(hranica.getMonth() - ARCHIV_ANONYMIZOVAT_PO_MESIACOCH);
+
+  data.forEach((r, i) => {
+    if (r[5] === ARCHIV_ANONYMIZOVANE) return;
+    const p = String(r[0]).replace(/\s/g, '').split('.');
+    if (p.length !== 3) return;
+    if (new Date(p[2], p[1] - 1, p[0]) < hranica) {
+      sheet.getRange(i + 2, 4).setValue(ARCHIV_ANONYMIZOVANE); // Meno
+      sheet.getRange(i + 2, 6).setValue(ARCHIV_ANONYMIZOVANE); // E-mail
+    }
+  });
+}
+
 function cleanupOldReservations() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
   const data = sheet.getDataRange().getDisplayValues();
-  
-  const dnes = new Date(); 
+
+  const dnes = new Date();
   dnes.setHours(0,0,0,0);
   const hranica = new Date(dnes.setDate(dnes.getDate() - 7));
-  
+
   for (let i = data.length - 1; i >= 1; i--) {
     let p = data[i][0].split('.');
     if (p.length === 3) {
       let dTab = new Date(p[2], p[1]-1, p[0]);
       if (dTab < hranica) {
-        sheet.deleteRow(i + 1);
+        // Ak sa archivácia nepodarí, riadok nemažeme - skúsi sa to znova pri ďalšom behu.
+        if (archiveReservation(data[i], 'Prebehla', '')) {
+          sheet.deleteRow(i + 1);
+        }
       }
     }
+  }
+
+  try {
+    anonymizeOldArchive();
+  } catch (err) {
+    console.error('Anonymizácia archívu zlyhala:', err);
   }
 }
 
