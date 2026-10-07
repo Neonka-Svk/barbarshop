@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recenzia | Barbar Shop</title>
+  <style>
+    <?!= fontFaceCss ?>
+    body {
+      font-family: 'Roboto', 'Segoe UI', Helvetica, Arial, sans-serif;
+      background-color: #1a1a1a;
+      color: #e0e0e0;
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      box-sizing: border-box;
+    }
+    .card {
+      background-color: #2b1d16;
+      border: 1px solid #f0c419;
+      border-radius: 12px;
+      padding: 32px;
+      max-width: 480px;
+      width: 100%;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      box-sizing: border-box;
+    }
+    h2 { color: #f0c419; margin: 0 0 20px 0; text-align: center; }
+    .details {
+      background-color: #1a1a1a;
+      padding: 12px 15px;
+      border-radius: 6px;
+      margin-bottom: 22px;
+      font-size: 15px;
+      border-left: 4px solid #f0c419;
+    }
+    .details b { color: #f0c419; }
+    label.field { display: block; color: #f0c419; font-weight: bold; font-size: 14px; margin: 18px 0 6px; }
+    .stars { display: flex; justify-content: center; gap: 6px; margin: 4px 0 0; }
+    .star {
+      background: none;
+      border: none;
+      color: #555;
+      font-size: 40px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0 2px;
+      transition: color 0.15s, transform 0.1s;
+    }
+    .star.on { color: #f0c419; }
+    .star:hover { transform: scale(1.15); }
+    textarea, input[type="text"] {
+      width: 100%;
+      box-sizing: border-box;
+      background-color: #1a1a1a;
+      border: 1px solid #444;
+      color: #fff;
+      padding: 12px;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 16px;
+    }
+    textarea { min-height: 120px; resize: vertical; }
+    textarea:focus, input[type="text"]:focus { outline: none; border-color: #f0c419; }
+    .consent { display: flex; gap: 10px; align-items: flex-start; margin-top: 20px; font-size: 14px; line-height: 1.5; }
+    .consent input { margin-top: 3px; width: 18px; height: 18px; flex: 0 0 auto; }
+    .consent a { color: #f0c419; }
+    .btn {
+      background-color: #d32f2f;
+      color: white;
+      border: none;
+      padding: 15px 25px;
+      font-size: 16px;
+      font-weight: bold;
+      border-radius: 6px;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 22px;
+      transition: background-color 0.3s;
+    }
+    .btn:hover { background-color: #b71c1c; }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .error { color: #ff8a80; font-size: 14px; margin-top: 14px; min-height: 18px; text-align: center; }
+    .done { text-align: center; }
+    .done .icon { font-size: 60px; color: #4caf50; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div id="formView">
+      <h2>Ako sa ti páčil strih?</h2>
+
+      <div class="details">
+        <b>Služba:</b> <?= sluzba ?><br>
+        <b>Dátum:</b> <?= datum ?>
+      </div>
+
+      <label class="field">Hodnotenie *</label>
+      <div class="stars" id="stars" role="radiogroup" aria-label="Hodnotenie">
+        <button type="button" class="star" data-v="1" aria-label="1 hviezdička">&#9733;</button>
+        <button type="button" class="star" data-v="2" aria-label="2 hviezdičky">&#9733;</button>
+        <button type="button" class="star" data-v="3" aria-label="3 hviezdičky">&#9733;</button>
+        <button type="button" class="star" data-v="4" aria-label="4 hviezdičky">&#9733;</button>
+        <button type="button" class="star" data-v="5" aria-label="5 hviezdičiek">&#9733;</button>
+      </div>
+
+      <label class="field" for="text">Recenzia *</label>
+      <textarea id="text" maxlength="1000" placeholder="Čo sa ti páčilo? Čo by sme mohli robiť lepšie?"></textarea>
+
+      <label class="field" for="name">Zobraziť na webe ako *</label>
+      <input type="text" id="name" maxlength="40" value="<?= meno ?>">
+
+      <div class="consent">
+        <input type="checkbox" id="consent">
+        <label for="consent">Súhlasím so zverejnením mojej recenzie, hodnotenia a vyššie uvedeného mena na webe Barbar Shop. Súhlas môžem kedykoľvek odvolať (napíš nám a recenziu odstránime). Viac v <a href="<?= privacyUrl ?>" target="_blank" rel="noopener">zásadách ochrany osobných údajov</a>.</label>
+      </div>
+
+      <div class="error" id="error" role="alert"></div>
+      <button type="button" class="btn" id="submit">ODOSLAŤ RECENZIU</button>
+    </div>
+
+    <div class="done" id="doneView" hidden>
+      <div class="icon">&#10003;</div>
+      <h2>Ďakujeme!</h2>
+      <p>Recenziu sme prijali. Na webe sa zobrazí po schválení.</p>
+      <p>Môžeš zatvoriť túto stránku.</p>
+    </div>
+  </div>
+
+  <script>
+    const REVIEW_ID = '<?= id ?>';
+    let stars = 0;
+
+    const starBtns = Array.from(document.querySelectorAll('.star'));
+    function paintStars(n) {
+      starBtns.forEach(function (b) { b.classList.toggle('on', Number(b.dataset.v) <= n); });
+    }
+    starBtns.forEach(function (b) {
+      b.addEventListener('click', function () { stars = Number(b.dataset.v); paintStars(stars); });
+      b.addEventListener('mouseenter', function () { paintStars(Number(b.dataset.v)); });
+    });
+    document.getElementById('stars').addEventListener('mouseleave', function () { paintStars(stars); });
+
+    const errorEl = document.getElementById('error');
+    const submitBtn = document.getElementById('submit');
+
+    submitBtn.addEventListener('click', function () {
+      errorEl.textContent = '';
+      const text = document.getElementById('text').value.trim();
+      const name = document.getElementById('name').value.trim();
+      const consent = document.getElementById('consent').checked;
+
+      if (!stars) { errorEl.textContent = 'Vyber počet hviezdičiek.'; return; }
+      if (text.length < 5) { errorEl.textContent = 'Napíš aspoň pár slov (min. 5 znakov).'; return; }
+      if (!name) { errorEl.textContent = 'Doplň meno, ktoré sa zobrazí na webe.'; return; }
+      if (!consent) { errorEl.textContent = 'Bez súhlasu so zverejnením recenziu nevieme odoslať.'; return; }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'ODOSÍELAM...';
+
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (res && res.ok) {
+            document.getElementById('formView').hidden = true;
+            document.getElementById('doneView').hidden = false;
+          } else {
+            errorEl.textContent = (res && res.error) ? res.error : 'Niečo sa pokazilo, skús to prosím znova.';
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'ODOSLAŤ RECENZIU';
+          }
+        })
+        .withFailureHandler(function () {
+          errorEl.textContent = 'Spojenie zlyhalo, skús to prosím znova.';
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'ODOSLAŤ RECENZIU';
+        })
+        .submitReview({ id: REVIEW_ID, stars: stars, text: text, name: name, consent: consent });
+    });
+  </script>
+</body>
+</html>

@@ -648,6 +648,36 @@ function doGet(e) {
     }
   }
 
+  // --- AKCIA 3b: STRÁNKA NA NAPÍSANIE RECENZIE ---
+  if (action === 'reviewPage' && id) {
+    const rez = findReservationForReview_(id);
+    const chyba = !rez ? 'nenajdene' : (rez.chyba || (reviewExists_(id) ? 'existuje' : null));
+    if (chyba) {
+      return HtmlService.createHtmlOutput(htmlStart + escapeHtml(REVIEW_CHYBY[chyba]) + htmlEnd);
+    }
+    const template = HtmlService.createTemplateFromFile('RecenziaPage');
+    template.id = id;
+    template.meno = suggestDisplayName_(rez.meno);
+    template.datum = rez.datum;
+    template.sluzba = rez.sluzba;
+    template.privacyUrl = SITE_URL + '/privacy.html';
+    template.fontFaceCss = fontFaceCss();
+    return template.evaluate().setTitle("Recenzia | Barbar Shop").addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  }
+
+  // --- AKCIA 3d: SCHVÁLENIE RECENZIE HOLIČOM (odkaz z mailu, 2 kroky) ---
+  if (action === 'approveReview') {
+    return showApproveReviewPage_(id, e.parameter.t);
+  }
+  if (action === 'doApproveReview') {
+    return doApproveReview_(id, e.parameter.t, e.parameter.odpoved);
+  }
+
+  // --- AKCIA 3c: SCHVÁLENÉ RECENZIE PRE WEB ---
+  if (action === 'reviews') {
+    return jsonOut(getPublicReviews_());
+  }
+
   // --- AKCIA 4: JSON DÁTA PRE KALENDÁR ---
   const sheetCustom = ss.getSheetByName(SHEET_CUSTOM);
   const sheetDefault = ss.getSheetByName(SHEET_DEFAULT); 
@@ -804,6 +834,11 @@ function handleEdit(e) {
     if (konfliktneDatumyObj.length > 0) {
       let template = HtmlService.createTemplateFromFile('DialogZrusenie');
       template.konflikty = jsonForScript(konfliktneDatumyObj);
+      // Jednorazový kľúč: processCancellations je verejne volateľná cez google.script.run (aj z cudzej
+      // stránky tejto aplikácie), preto ju povolíme len z dialógu, ktorý sme práve otvorili my.
+      const nonce = Utilities.getUuid();
+      CacheService.getScriptCache().put('cancelNonce_' + nonce, '1', 21600);
+      template.nonce = nonce;
       let html = template.evaluate().setWidth(550).setHeight(450);
       SpreadsheetApp.getUi().showModalDialog(html, 'Konflikt pri rezerváciách a časoch!');
     }
@@ -811,24 +846,419 @@ function handleEdit(e) {
 }
 
 // Hromadné rušenie z Popup Okna
-function processCancellations(cancellations) {
+function processCancellations(cancellations, nonce) {
+  const cache = CacheService.getScriptCache();
+  if (!nonce || !cache.get('cancelNonce_' + nonce) || !Array.isArray(cancellations)) {
+    throw new Error('Neplatná relácia, otvor dialóg s konfliktmi znova.');
+  }
+  cache.remove('cancelNonce_' + nonce);
+
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
   cancellations.sort((a,b) => b.row - a.row);
-  
+
   cancellations.forEach(c => {
     try {
-      const bodyHtml = generateCancellationEmailHtml(c.meno, c.datum, c.cas.replace(/^'/, ''), c.dovod, true);
-      MailApp.sendEmail({ 
-        to: c.email, 
-        subject: "⚠️ Zrušenie rezervácie - Barbar Shop", 
-        htmlBody: bodyHtml 
+      // Údaje (meno, e-mail, termín) berieme priamo z tabuľky, nie z toho, čo prišlo z dialógu.
+      const r = sheet.getRange(c.row, 1, 1, 8).getDisplayValues()[0];
+      const bodyHtml = generateCancellationEmailHtml(r[3], r[0], String(r[1]).replace(/^'/, ''), c.dovod, true);
+      MailApp.sendEmail({
+        to: r[5],
+        subject: "⚠️ Zrušenie rezervácie - Barbar Shop",
+        htmlBody: bodyHtml
       });
-      archiveReservation(sheet.getRange(c.row, 1, 1, 8).getDisplayValues()[0], 'Zrušil holič', c.dovod);
+      archiveReservation(r, 'Zrušil holič', c.dovod);
       sheet.deleteRow(c.row);
     } catch(err) {
       console.error("Nepodarilo sa zrušiť riadok:", c.row);
     }
   });
+}
+
+// ===================== RECENZIE =====================
+// Tok: deň po strihu príde zákazníkovi mail s odkazom (?action=reviewPage&id=<ID rezervácie>) ->
+// stránka RecenziaPage.html -> submitReview() zapíše riadok do hárku "Recenzie" -> holič ho
+// odklikne (stĺpec "Schválené") -> riadok sa objaví na webe (?action=reviews).
+// Jedna rezervácia = najviac jedna recenzia; rezervácia sa hľadá v "Rezervácie" aj v "Archív".
+const SHEET_RECENZIE = 'Recenzie';
+const RECENZIE_HLAVICKA = ['Identifikátor rezervácie', 'Dátum strihania', 'Hodnotenie (1-5)', 'Recenzia', 'Zobrazené meno', 'Odoslané (súhlas so zverejnením)', 'Schválené', 'Odpoveď holiča'];
+const REVIEW_PLATNOST_DNI = 30;
+const REVIEW_MAX_ZOBRAZENYCH = 12;
+const REVIEW_STLPEC_MAILU = 10; // J v hárku Rezervácie: označí, že mail s recenziou už odišiel
+const SITE_URL = 'https://barbarshop-mu.vercel.app';
+const REVIEW_CHYBY = {
+  nenajdene: 'Rezervácia nebola nájdená.',
+  zrusena: 'Tento termín bol zrušený, takže sa k nemu nedá napísať recenzia.',
+  este_nie: 'Na recenziu si ešte počkaj, kým strih prebehne.',
+  expirovane: 'Platnosť odkazu na recenziu už vypršala.',
+  existuje: 'K tejto návšteve už recenzia existuje, ďakujeme!'
+};
+
+function getReviewSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_RECENZIE);
+  if (!sheet) {
+    const povodny = ss.getActiveSheet();
+    sheet = ss.insertSheet(SHEET_RECENZIE);
+    sheet.getRange(1, 1, 1, RECENZIE_HLAVICKA.length).setValues([RECENZIE_HLAVICKA]).setFontWeight('bold');
+    sheet.getRange(1, 1, sheet.getMaxRows(), 2).setNumberFormat('@');
+    sheet.getRange(1, 6, sheet.getMaxRows(), 1).setNumberFormat('@');
+    sheet.setFrozenRows(1);
+    try { ss.setActiveSheet(povodny); } catch (err) {}
+  }
+  return sheet;
+}
+
+function slovakDateToYMD_(str) {
+  const p = String(str).replace(/\s/g, '').split('.');
+  if (p.length !== 3) return null;
+  return p[2] + '-' + p[1].padStart(2, '0') + '-' + p[0].padStart(2, '0');
+}
+
+// Aktuálny bratislavský čas prevedený na Date z lokálnych čísel - rovnaký trik ako vo validateBookingData,
+// takže rozdiely oproti new Date(y, m, d, h, min) vychádzajú správne bez ohľadu na časovú zónu projektu.
+function bratislavaNow_() {
+  return new Date(Utilities.formatDate(new Date(), 'Europe/Bratislava', 'yyyy/MM/dd HH:mm:ss'));
+}
+
+// Vráti {datum, cas, meno, sluzba}, alebo {chyba: kód z REVIEW_CHYBY}, alebo null (nenájdené).
+function findReservationForReview_(id) {
+  if (!id || !/^[0-9a-f-]{36}$/i.test(id)) return null;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let rez = null;
+
+  const sheetRez = ss.getSheetByName(SHEET_NAME);
+  if (sheetRez) {
+    const data = sheetRez.getDataRange().getDisplayValues();
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][7] === id) {
+        rez = { datum: data[i][0], cas: String(data[i][1]).replace(/^'/, ''), meno: data[i][3], sluzba: data[i][4] };
+        break;
+      }
+    }
+  }
+  if (!rez) {
+    const sheetArch = ss.getSheetByName(SHEET_ARCHIV);
+    if (sheetArch && sheetArch.getLastRow() > 1) {
+      const data = sheetArch.getRange(2, 1, sheetArch.getLastRow() - 1, ARCHIV_HLAVICKA.length).getDisplayValues();
+      for (let i = 0; i < data.length; i++) {
+        if (data[i][6] === id) {
+          if (data[i][7] !== 'Prebehla') return { chyba: 'zrusena' };
+          rez = { datum: data[i][0], cas: String(data[i][1]).replace(/^'/, ''), meno: data[i][3], sluzba: data[i][4] };
+          break;
+        }
+      }
+    }
+  }
+  if (!rez) return null;
+
+  const ymd = slovakDateToYMD_(rez.datum);
+  if (!ymd) return null;
+  const d = ymd.split('-').map(Number);
+  const t = String(rez.cas).split(':').map(Number);
+  const start = new Date(d[0], d[1] - 1, d[2], t[0] || 0, t[1] || 0, 0);
+  const odStartu = (bratislavaNow_().getTime() - start.getTime()) / 60000;
+  if (odStartu < 90) return { chyba: 'este_nie' };
+  if (odStartu > REVIEW_PLATNOST_DNI * 1440) return { chyba: 'expirovane' };
+  return rez;
+}
+
+function reviewExists_(id) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_RECENZIE);
+  if (!sheet || sheet.getLastRow() < 2) return false;
+  const ids = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getDisplayValues();
+  return ids.some(function(r) { return r[0] === id; });
+}
+
+// "Jakub Kramár" -> "Jakub K." (zákazník si to na stránke môže upraviť)
+function suggestDisplayName_(full) {
+  const parts = String(full || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '';
+  if (parts.length === 1) return parts[0];
+  return parts[0] + ' ' + parts[parts.length - 1].charAt(0).toUpperCase() + '.';
+}
+
+// Volá sa zo stránky RecenziaPage.html cez google.script.run. Všetko sa overuje tu na serveri.
+function submitReview(payload) {
+  try {
+    if (!payload || typeof payload !== 'object') return { ok: false, error: 'Neplatné dáta.' };
+    const id = String(payload.id || '');
+    const stars = Number(payload.stars);
+    const text = String(payload.text || '').trim();
+    const name = String(payload.name || '').trim();
+
+    if (payload.consent !== true) return { ok: false, error: 'Bez súhlasu so zverejnením recenziu nevieme uložiť.' };
+    if (!(stars >= 1 && stars <= 5 && Math.floor(stars) === stars)) return { ok: false, error: 'Vyber počet hviezdičiek.' };
+    if (text.length < 5 || text.length > 1000) return { ok: false, error: 'Recenzia musí mať 5 až 1000 znakov.' };
+    if (name.length < 1 || name.length > 40) return { ok: false, error: 'Zobrazené meno musí mať 1 až 40 znakov.' };
+
+    const lock = LockService.getScriptLock();
+    if (!lock.tryLock(15000)) return { ok: false, error: 'Server je vyťažený, skús to prosím o chvíľu znova.' };
+
+    try {
+      const rez = findReservationForReview_(id);
+      if (!rez) return { ok: false, error: REVIEW_CHYBY.nenajdene };
+      if (rez.chyba) return { ok: false, error: REVIEW_CHYBY[rez.chyba] };
+      if (reviewExists_(id)) return { ok: false, error: REVIEW_CHYBY.existuje };
+
+      const sheet = getReviewSheet_();
+      const novyRiadok = [
+        id,
+        rez.datum,
+        stars,
+        safeCell(text),
+        safeCell(name),
+        Utilities.formatDate(new Date(), 'Europe/Bratislava', 'd.M.yyyy HH:mm:ss'),
+        false,
+        ''
+      ];
+      // Najnovšia recenzia hore (hneď pod hlavičkou), nech si na nové a neodpovedané nezabudneš.
+      let cielovyRiadok;
+      if (sheet.getLastRow() < 2) {
+        sheet.appendRow(novyRiadok);
+        cielovyRiadok = sheet.getLastRow();
+      } else {
+        sheet.insertRowAfter(1);
+        sheet.getRange(3, 1, 1, RECENZIE_HLAVICKA.length).copyFormatToRange(sheet, 1, RECENZIE_HLAVICKA.length, 2, 2);
+        sheet.getRange(2, 1, 1, RECENZIE_HLAVICKA.length).setValues([novyRiadok]);
+        cielovyRiadok = 2;
+      }
+      sheet.getRange(cielovyRiadok, 7).insertCheckboxes();
+    } finally {
+      lock.releaseLock();
+    }
+
+    try {
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const approveUrl = ScriptApp.getService().getUrl() + '?action=approveReview&id=' + id + '&t=' + reviewApprovalToken_(id);
+      const sheetUrl = ss.getUrl() + '#gid=' + getReviewSheet_().getSheetId();
+      MailApp.sendEmail({
+        to: MOJ_EMAIL,
+        subject: 'Nová recenzia čaká na schválenie (' + stars + '/5)',
+        htmlBody: generateNewReviewEmailHtml_(name, stars, text, approveUrl, sheetUrl)
+      });
+    } catch (err) {
+      console.error('Upozornenie na novú recenziu sa neodoslalo:', err);
+    }
+    return { ok: true };
+  } catch (err) {
+    console.error('submitReview zlyhalo:', err);
+    return { ok: false, error: 'Niečo sa pokazilo, skús to prosím znova.' };
+  }
+}
+
+// Podpis odkazu na schválenie. Samotné ID recenzie nestačí (pozná ho aj zákazník zo svojho odkazu na
+// recenziu), preto sa odkaz podpisuje tajným kľúčom, ktorý zná len skript.
+function reviewApprovalToken_(id) {
+  const props = PropertiesService.getScriptProperties();
+  let secret = props.getProperty('REVIEW_SECRET');
+  if (!secret) {
+    secret = Utilities.getUuid() + Utilities.getUuid();
+    props.setProperty('REVIEW_SECRET', secret);
+  }
+  const sig = Utilities.computeHmacSha256Signature(id + '|approve', secret);
+  return Utilities.base64EncodeWebSafe(sig).replace(/=+$/, '').slice(0, 32);
+}
+
+// Vráti {row, id, stars, text, name, approved, reply} alebo null.
+function findReview_(id) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_RECENZIE);
+  if (!sheet || sheet.getLastRow() < 2) return null;
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, RECENZIE_HLAVICKA.length).getValues();
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i][0]) === id) {
+      return { row: i + 2, id: id, stars: Number(rows[i][2]), text: String(rows[i][3]), name: String(rows[i][4]), approved: rows[i][6] === true, reply: String(rows[i][7] || '') };
+    }
+  }
+  return null;
+}
+
+// Jednoduchá stránka pre holiča (schválenie recenzie). Všetko dynamické sa escapuje.
+function reviewAdminPage_(title, innerHtml) {
+  const html = '<!DOCTYPE html><html lang="sk"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Recenzia | Barbar Shop</title>' +
+    '<style>' + fontFaceCss() +
+    'body{font-family:Roboto,"Segoe UI",Helvetica,Arial,sans-serif;background:#1a1a1a;color:#e0e0e0;margin:0;padding:20px;display:flex;justify-content:center;align-items:center;min-height:100vh;box-sizing:border-box}' +
+    '.card{background:#2b1d16;border:1px solid #f0c419;border-radius:12px;padding:32px;max-width:480px;width:100%;box-shadow:0 10px 30px rgba(0,0,0,.5);box-sizing:border-box}' +
+    'h2{color:#f0c419;margin:0 0 18px;text-align:center}.stars{color:#f0c419;font-size:28px;letter-spacing:3px;text-align:center}.stars .off{color:#555}' +
+    '.quote{background:#1a1a1a;border-left:4px solid #f0c419;border-radius:6px;padding:12px 15px;margin:16px 0;white-space:pre-line;overflow-wrap:anywhere}' +
+    '.who{color:#aaa;font-size:14px;text-align:center}label{display:block;color:#f0c419;font-weight:bold;font-size:14px;margin:18px 0 6px}' +
+    'textarea{width:100%;box-sizing:border-box;min-height:80px;background:#1a1a1a;border:1px solid #444;color:#fff;padding:12px;border-radius:6px;font-family:inherit;font-size:16px}' +
+    '.btn{display:block;width:100%;box-sizing:border-box;text-align:center;text-decoration:none;background:#2e7d32;color:#fff;border:none;padding:15px;font-size:16px;font-weight:bold;border-radius:6px;cursor:pointer;margin-top:18px}.btn:hover{background:#256528}' +
+    '.link{display:block;text-align:center;color:#f0c419;margin-top:16px;font-size:14px}.ok{font-size:60px;color:#4caf50;text-align:center}p{line-height:1.5}' +
+    '</style></head><body><div class="card"><h2>' + escapeHtml(title) + '</h2>' + innerHtml + '</div></body></html>';
+  return HtmlService.createHtmlOutput(html).setTitle('Recenzia | Barbar Shop').addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+function starsHtml_(n) {
+  let out = '';
+  for (let i = 1; i <= 5; i++) out += i <= n ? '<span>&#9733;</span>' : '<span class="off">&#9733;</span>';
+  return '<div class="stars">' + out + '</div>';
+}
+
+// Krok 1: stránka s náhľadom recenzie (zatiaľ nič nemení, preto ju bezpečne otvorí aj antivírus/skener mailu).
+function showApproveReviewPage_(id, token) {
+  if (!id || token !== reviewApprovalToken_(id)) return reviewAdminPage_('Neplatný odkaz', '<p>Tento odkaz na schválenie nie je platný.</p>');
+  const r = findReview_(id);
+  if (!r) return reviewAdminPage_('Recenzia sa nenašla', '<p>Recenzia už neexistuje (možno bola odstránená z tabuľky).</p>');
+  const sheetUrl = SpreadsheetApp.getActiveSpreadsheet().getUrl() + '#gid=' + getReviewSheet_().getSheetId();
+  if (r.approved) {
+    return reviewAdminPage_('Už schválené', '<p>Táto recenzia už je schválená a zobrazuje sa na webe.</p><a class="link" href="' + sheetUrl + '" target="_top">Otvoriť tabuľku</a>');
+  }
+  return reviewAdminPage_('Schváliť recenziu?',
+    starsHtml_(r.stars) +
+    '<div class="quote">' + escapeHtml(r.text) + '</div>' +
+    '<div class="who">Zobrazí sa ako: <strong>' + escapeHtml(r.name) + '</strong></div>' +
+    '<form method="GET" action="' + escapeHtml(ScriptApp.getService().getUrl()) + '" target="_top">' +
+    '<input type="hidden" name="action" value="doApproveReview"><input type="hidden" name="id" value="' + escapeHtml(id) + '"><input type="hidden" name="t" value="' + escapeHtml(token) + '">' +
+    '<label for="odpoved">Tvoja odpoveď pod recenziou (nepovinné)</label>' +
+    '<textarea id="odpoved" name="odpoved" maxlength="500" placeholder="Napr. Ďakujeme, tešíme sa na ďalšiu návštevu!"></textarea>' +
+    '<button type="submit" class="btn">SCHVÁLIŤ A ZVEREJNIŤ</button></form>' +
+    '<a class="link" href="' + sheetUrl + '" target="_top">Radšej otvoriť tabuľku</a>');
+}
+
+// Krok 2: skutočné schválenie.
+function doApproveReview_(id, token, odpoved) {
+  if (!id || token !== reviewApprovalToken_(id)) return reviewAdminPage_('Neplatný odkaz', '<p>Tento odkaz na schválenie nie je platný.</p>');
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) return reviewAdminPage_('Skús znova', '<p>Server je práve vyťažený, skús to o chvíľu.</p>');
+  try {
+    const r = findReview_(id);
+    if (!r) return reviewAdminPage_('Recenzia sa nenašla', '<p>Recenzia už neexistuje.</p>');
+    if (r.approved) return reviewAdminPage_('Už schválené', '<p>Táto recenzia už bola schválená.</p>');
+    const sheet = getReviewSheet_();
+    sheet.getRange(r.row, 7).setValue(true);
+    const reply = String(odpoved || '').trim().slice(0, 500);
+    if (reply) sheet.getRange(r.row, 8).setValue(safeCell(reply));
+  } finally {
+    lock.releaseLock();
+  }
+  return reviewAdminPage_('Hotovo', '<div class="ok">&#10003;</div><p style="text-align:center">Recenzia je schválená a na webe sa zobrazí do pár minút. Môžeš zatvoriť túto stránku.</p>');
+}
+
+function generateNewReviewEmailHtml_(name, stars, text, approveUrl, sheetUrl) {
+  let hviezdy = '';
+  for (let i = 1; i <= 5; i++) {
+    hviezdy += '<span style="color:' + (i <= stars ? '#f0c419' : '#d8d8d8') + ';">&#9733;</span>';
+  }
+  const btn = function(href, label, bg, color) {
+    return '<a href="' + href + '" target="_blank" style="display:inline-block;margin:6px;padding:14px 26px;background-color:' + bg + ';color:' + color + ';font-family:Arial,sans-serif;font-size:15px;font-weight:bold;text-decoration:none;border-radius:6px;">' + label + '</a>';
+  };
+  return '<!DOCTYPE html><html lang="sk"><head><meta charset="UTF-8"></head><body style="margin:0;padding:0;background-color:#f4f4f5;font-family:Arial,sans-serif;">' +
+    '<table border="0" cellpadding="0" cellspacing="0" width="100%" style="padding:20px 0;"><tr><td align="center">' +
+    '<table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color:#ffffff;border-radius:12px;overflow:hidden;border-collapse:separate;max-width:100%;">' +
+    '<tr><td align="center" style="background-color:#1a1a1a;padding:30px;border-bottom:4px solid #f0c419;"><img src="https://raw.githubusercontent.com/Neonka-Svk/barbarshop/refs/heads/main/barbar_logo_small.png" alt="Barbar Shop" width="150" style="display:block;max-width:150px;"></td></tr>' +
+    '<tr><td style="padding:36px 40px;color:#333333;line-height:1.6;font-size:16px;">' +
+    '<h1 style="color:#1a1a1a;font-size:24px;margin:0 0 6px 0;text-align:center;">Nová recenzia</h1>' +
+    '<p style="margin:0 0 20px 0;text-align:center;color:#888888;font-size:14px;">Čaká na tvoje schválenie</p>' +
+    '<div style="text-align:center;font-size:34px;letter-spacing:4px;line-height:1.2;margin:0 0 6px 0;">' + hviezdy + '</div>' +
+    '<p style="margin:0 0 20px 0;text-align:center;color:#555555;font-size:14px;">od <strong style="color:#1a1a1a;">' + escapeHtml(name) + '</strong> &middot; ' + stars + ' z 5</p>' +
+    '<table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color:#fafafa;border:1px solid #eaeaea;border-left:4px solid #f0c419;border-radius:8px;border-collapse:separate;"><tr><td style="padding:18px 20px;color:#1a1a1a;font-size:16px;line-height:1.6;">' +
+    escapeHtml(text).replace(/\n/g, '<br>') + '</td></tr></table>' +
+    '<div style="text-align:center;margin-top:28px;">' +
+    btn(approveUrl, 'SCHVÁLIŤ RECENZIU', '#2e7d32', '#ffffff') +
+    btn(sheetUrl, 'OTVORIŤ TABUĽKU', '#1a1a1a', '#f0c419') +
+    '</div>' +
+    '<p style="margin:22px 0 0 0;text-align:center;color:#888888;font-size:13px;">Po kliknutí na "Schváliť" uvidíš náhľad a môžeš pridať odpoveď. Nič sa nezverejní, kým to nepotvrdíš.</p>' +
+    '</td></tr>' +
+    '<tr><td align="center" style="background-color:#f9f9f9;padding:22px;border-top:1px solid #eaeaea;font-size:12px;color:#999999;line-height:1.5;"><p style="margin:0;">Tento e-mail bol vygenerovaný automaticky systémom Barbar Shop. &copy; 2026 Barbar Shop. Sila a česť.</p></td></tr>' +
+    '</table></td></tr></table></body></html>';
+}
+
+function formatReviewDate_(v) {
+  return v instanceof Date ? Utilities.formatDate(v, 'Europe/Bratislava', 'd.M.yyyy') : String(v);
+}
+
+// Len schválené recenzie, bez ID a bez akýchkoľvek kontaktných údajov.
+function getPublicReviews_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_RECENZIE);
+  if (!sheet || sheet.getLastRow() < 2) return { count: 0, average: 0, reviews: [] };
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, RECENZIE_HLAVICKA.length).getValues();
+  const approved = rows.filter(function(r) { return r[6] === true && Number(r[2]) >= 1; });
+  if (approved.length === 0) return { count: 0, average: 0, reviews: [] };
+  const sum = approved.reduce(function(s, r) { return s + Number(r[2]); }, 0);
+  // Najnovšie prvé podľa času odoslania (stĺpec F, "d.M.yyyy HH:mm:ss"); pri zhode ostáva poradie z tabuľky.
+  const casOdoslania = function(r) {
+    const m = String(r[5]).match(/^(\d+)\.(\d+)\.(\d+)\s+(\d+):(\d+):(\d+)/);
+    return m ? new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]).getTime() : 0;
+  };
+  const zoradene = approved.slice().sort(function(a, b) { return casOdoslania(b) - casOdoslania(a); });
+  const reviews = zoradene.slice(0, REVIEW_MAX_ZOBRAZENYCH).map(function(r) {
+    return { stars: Number(r[2]), text: String(r[3]), name: String(r[4]), date: formatReviewDate_(r[1]), reply: String(r[7] || '') };
+  });
+  return { count: approved.length, average: Math.round(sum / approved.length * 10) / 10, reviews: reviews };
+}
+
+function generateReviewEmailHtml_(meno, datum, reviewUrl) {
+  meno = escapeHtml(meno);
+  datum = escapeHtml(datum);
+  return '<!DOCTYPE html><html lang="sk"><head><meta charset="UTF-8"></head><body style="margin:0;padding:0;background-color:#f4f4f5;font-family:Arial,sans-serif;">' +
+    '<table border="0" cellpadding="0" cellspacing="0" width="100%" style="padding:20px 0;"><tr><td align="center">' +
+    '<table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color:#ffffff;border-radius:12px;overflow:hidden;border-collapse:separate;max-width:100%;">' +
+    '<tr><td align="center" style="background-color:#1a1a1a;padding:30px;border-bottom:4px solid #f0c419;"><img src="https://raw.githubusercontent.com/Neonka-Svk/barbarshop/refs/heads/main/barbar_logo_small.png" alt="Barbar Shop" width="150" style="display:block;max-width:150px;"></td></tr>' +
+    '<tr><td style="padding:40px;color:#333333;line-height:1.6;font-size:16px;">' +
+    '<h1 style="color:#1a1a1a;font-size:24px;margin:0 0 20px 0;text-align:center;">Ako sa ti páčil strih?</h1>' +
+    '<p style="margin:0 0 15px 0;">Zdravím ťa, <strong>' + meno + '</strong>,</p>' +
+    '<p style="margin:0 0 25px 0;">ďakujeme za návštevu (' + datum + '). Ak ti chvíľku zostane, napíš nám krátku recenziu. Pomôže to ďalším bojovníkom a nám ukáže, čo robíme dobre. Zaberie to minútu.</p>' +
+    '<table border="0" cellpadding="0" cellspacing="0" width="100%"><tr><td align="center"><table border="0" cellpadding="0" cellspacing="0"><tr><td align="center" bgcolor="#f0c419" style="border-radius:6px;">' +
+    '<a href="' + reviewUrl + '" target="_blank" style="font-size:15px;font-family:Arial,sans-serif;color:#1a1a1a;text-decoration:none;border-radius:6px;padding:14px 28px;display:inline-block;font-weight:bold;">NAPÍSAŤ RECENZIU</a>' +
+    '</td></tr></table></td></tr></table>' +
+    '<p style="margin:25px 0 0 0;font-size:13px;color:#888888;">Odkaz platí ' + REVIEW_PLATNOST_DNI + ' dní. Recenzia sa na webe zobrazí až po schválení a len s menom, ktoré si zvolíš.</p>' +
+    '</td></tr>' +
+    '<tr><td align="center" style="background-color:#f9f9f9;padding:25px;border-top:1px solid #eaeaea;font-size:12px;color:#999999;line-height:1.5;"><p style="margin:0 0 10px 0;">Tento e-mail bol vygenerovaný automaticky systémom Barbar Shop.<br>Prosíme, neodpovedajte naň.</p><p style="margin:0;">&copy; 2026 Barbar Shop. Sila a česť.</p></td></tr>' +
+    '</table></td></tr></table></body></html>';
+}
+
+// Spúšťa denný trigger (installReviewTrigger). Pošle jeden mail s odkazom na recenziu ku každej
+// rezervácii z uplynulých dní, ktorá ešte mail nedostala.
+function sendReviewRequests() {
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+    if (!sheet) return;
+    if (!sheet.getRange(1, REVIEW_STLPEC_MAILU).getValue()) {
+      sheet.getRange(1, REVIEW_STLPEC_MAILU).setValue('Mail s recenziou');
+      sheet.getRange(1, 9).copyFormatToRange(sheet, REVIEW_STLPEC_MAILU, REVIEW_STLPEC_MAILU, 1, 1);
+    }
+
+    const data = sheet.getDataRange().getDisplayValues();
+    const dnes = bratislavaNow_();
+    dnes.setHours(0, 0, 0, 0);
+    const baseUrl = ScriptApp.getService().getUrl();
+
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][REVIEW_STLPEC_MAILU - 1]) continue;
+      const ymd = slovakDateToYMD_(data[i][0]);
+      const id = data[i][7];
+      const email = data[i][5];
+      if (!ymd || !id || !email) continue;
+
+      const d = ymd.split('-').map(Number);
+      const dniOdTerminu = Math.round((dnes.getTime() - new Date(d[0], d[1] - 1, d[2]).getTime()) / 86400000);
+      if (dniOdTerminu < 1 || dniOdTerminu > 5) continue;
+
+      // Rezervujeme si časť dennej kvóty pre potvrdenia rezervácií.
+      if (MailApp.getRemainingDailyQuota() < 20) break;
+
+      try {
+        MailApp.sendEmail({
+          to: email,
+          subject: 'Ako sa ti páčil strih? - Barbar Shop',
+          htmlBody: generateReviewEmailHtml_(data[i][3], data[i][0], baseUrl + '?action=reviewPage&id=' + id)
+        });
+        sheet.getRange(i + 1, REVIEW_STLPEC_MAILU).setValue('POSLANÉ');
+      } catch (err) {
+        console.error('Mail s recenziou sa neodoslal (riadok ' + (i + 1) + '):', err);
+      }
+    }
+  } catch (err) {
+    console.error('sendReviewRequests zlyhalo:', err);
+  }
+}
+
+// Spusti RAZ ručne z editora (po tom, čo nasadíš tento kód): založí denný trigger okolo 13:00 bratislavského času.
+function installReviewTrigger() {
+  const uz = ScriptApp.getProjectTriggers().some(function(t) { return t.getHandlerFunction() === 'sendReviewRequests'; });
+  if (uz) { console.log('Trigger sendReviewRequests už existuje.'); return; }
+  ScriptApp.newTrigger('sendReviewRequests').timeBased().everyDays(1).atHour(13).inTimezone('Europe/Bratislava').create();
+  console.log('Trigger založený: sendReviewRequests, denne okolo 13:00.');
 }
 
 function onOpen() {

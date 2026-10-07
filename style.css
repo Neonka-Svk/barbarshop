@@ -830,3 +830,62 @@ main {
     height: 1px;
     overflow: hidden;
 }
+/* --- RECENZIE (sekcia pod kalendárom, zobrazí sa až keď existuje schválená recenzia) --- */
+.booking-container.reviews-section {
+    max-width: 800px;
+    width: calc(100% - 20px);
+    margin: 30px 10px;
+}
+
+.reviews-section[hidden] {
+    display: none;
+}
+
+.reviews-summary {
+    text-align: center;
+    color: var(--gold);
+    font-weight: bold;
+    margin: 0 0 18px 0;
+}
+
+.reviews-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px;
+}
+
+.review-card {
+    background: #3d2b22;
+    border: 1px solid rgba(240, 196, 25, 0.35);
+    border-radius: 6px;
+    padding: 14px;
+}
+
+.review-stars {
+    color: var(--gold);
+    letter-spacing: 2px;
+    font-size: 1.1rem;
+}
+
+.review-text {
+    margin: 8px 0;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+}
+
+.review-meta {
+    font-size: 0.8rem;
+    opacity: 0.7;
+}
+
+.review-reply {
+    margin-top: 10px;
+    padding-left: 10px;
+    border-left: 3px solid var(--red);
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
+}
+
+.review-reply strong {
+    color: var(--gold);
+}

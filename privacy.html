@@ -35,9 +35,23 @@
             font-size: 0.85rem;
             margin-top: 30px;
         }
-        .back-link {
-            display: inline-block;
-            margin-bottom: 15px;
+        .privacy a.back-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 20px;
+            padding: 9px 16px;
+            border: 1px solid var(--gold);
+            border-radius: 4px;
+            color: var(--gold);
+            font-weight: bold;
+            font-size: 0.9rem;
+            text-decoration: none;
+            transition: background 0.15s, color 0.15s;
+        }
+        .privacy a.back-link:hover {
+            background: var(--gold);
+            color: var(--dark);
         }
         footer a {
             color: inherit;
@@ -55,7 +69,7 @@
 
     <main>
         <section class="booking-container privacy">
-            <a class="back-link" href="index.html">&larr; Späť na objednávku</a>
+            <a class="back-link" href="index.html"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg>Späť na objednávku</a>
             <h2>Ochrana osobných údajov</h2>
 
             <p>Je to malý kamarátsky projekt, takže bez právnického žargónu: tu je jednoducho napísané, čo si o tebe pri objednávke ukladáme, načo to je a ako sa toho vieš zbaviť.</p>
@@ -74,7 +88,8 @@
                 <li>aby sme ti vedeli rezervovať termín a nikto iný ti ho nezobral,</li>
                 <li>aby ti prišlo potvrdenie a aby si mohol termín sám zrušiť cez odkaz v e-maile,</li>
                 <li>aby ťa holič vedel upozorniť, ak sa termín musí zmeniť alebo zrušiť,</li>
-                <li>aby mal holič prehľad o objednávkach.</li>
+                <li>aby mal holič prehľad o objednávkach,</li>
+                <li>aby sme ti deň po strihu poslali jeden e-mail s odkazom, kde môžeš napísať recenziu (nepovinné).</li>
             </ul>
             <p>Údaje nepredávame, nezdieľame s nikým ďalším a nepoužívame ich na reklamu.</p>
 
@@ -91,10 +106,20 @@
                 <li>Po 24 mesiacoch sa meno a e-mail z archívu automaticky vymažú. Ostane len dátum, služba a stav (prebehla / zrušená), ktoré už nikoho neidentifikujú a slúžia len na prehľad.</li>
             </ul>
 
-            <h3>Tvoje práva</h3>
-            <p>Môžeš sa kedykoľvek opýtať, čo o tebe máme, dať si údaje opraviť alebo zmazať ešte pred uplynutím lehoty vyššie. Stačí napísať na <a href="mailto:roman.barbarshop@gmail.com">roman.barbarshop@gmail.com</a> (uveď e-mail, s ktorým si sa objednával) a vybavíme to. Ak by si mal pocit, že sme to nevybavili ako treba, môžeš sa obrátiť na Úrad na ochranu osobných údajov SR (alebo v ČR na ÚOOÚ).</p>
+            <h3>Recenzie</h3>
+            <p>Recenzia je dobrovoľná a <strong>verejná</strong>. Ak ju napíšeš, uložíme si:</p>
+            <ul>
+                <li>hodnotenie a text, ktorý napíšeš,</li>
+                <li>meno, ktoré sa má zobraziť (predvyplníme krstné meno a iniciálu, môžeš ho zmeniť aj na prezývku),</li>
+                <li>čas tvojho súhlasu so zverejnením a ID návštevy, ku ktorej recenzia patrí (aby k jednej návšteve vznikla najviac jedna recenzia).</li>
+            </ul>
+            <p>Recenzia sa objaví na webe až po tom, ako ju holič schváli, spolu so zobrazeným menom, dátumom návštevy a prípadnou odpoveďou holiča. Tvoj e-mail ani priezvisko sa pri nej nezverejňujú. Zverejnenie je len na základe tvojho súhlasu, ktorý zaškrtneš pri odosielaní. Kedykoľvek ho môžeš odvolať: napíš na kontakt nižšie a recenziu odstránime. Recenzie držíme, kým o ich zmazanie nepožiadaš alebo ich sami neodstránime.</p>
+            <p>Zatiaľ sa k recenziám nedajú pripájať fotky. Ak sa to zmení, pribudne tu samostatná informácia a samostatný súhlas.</p>
 
-            <p class="updated">Posledná aktualizácia: 7. 10. 2026</p>
+            <h3>Tvoje práva</h3>
+            <p>Môžeš sa kedykoľvek opýtať, čo o tebe máme, dať si údaje opraviť alebo zmazať ešte pred uplynutím lehoty vyššie. Stačí napísať na <a href="mailto:roman.barbarshop@gmail.com">roman.barbarshop@gmail.com</a> (uveď e-mail, s ktorým si sa objednával) a vybavíme to.</p>
+
+            <p class="updated">Posledná aktualizácia: október 2026</p>
         </section>
     </main>
 

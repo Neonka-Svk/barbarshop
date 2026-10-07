@@ -63,7 +63,10 @@
           // Pošleme to do backendu a zatvoríme
           google.script.run.withSuccessHandler(() => {
              google.script.host.close();
-          }).processCancellations(toCancel);
+          }).withFailureHandler((err) => {
+             btn.innerText = "Chyba, zavri okno a skús znova";
+             alert("Rušenie zlyhalo: " + (err && err.message ? err.message : err));
+          }).processCancellations(toCancel, '<?= nonce ?>');
        } else {
           google.script.host.close();
        }

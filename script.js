@@ -258,8 +258,55 @@ function getProcessedSlotsForDate(targetDateStr) {
     return processedSlots.sort((a, b) => a.startMin - b.startMin);
 }
 
+// --- RECENZIE: načítajú sa až po kalendári, bez čakania (rezervácia sa tým nespomalí) ---
+async function loadReviews() {
+    try {
+        const response = await fetch(SCRIPT_URL + '?action=reviews');
+        if (!response.ok) return;
+        renderReviews(await response.json());
+    } catch (e) {
+        console.error('Chyba pri načítaní recenzií', e);
+    }
+}
+
+function renderReviews(data) {
+    const section = document.getElementById('reviews-section');
+    const list = document.getElementById('reviews-list');
+    const summary = document.getElementById('reviews-summary');
+    if (!section || !data || !Array.isArray(data.reviews) || data.reviews.length === 0) return;
+
+    const starsText = (n) => '★'.repeat(n) + '☆'.repeat(5 - n);
+    const makeEl = (tag, className, text) => {
+        const el = document.createElement(tag);
+        if (className) el.className = className;
+        if (text !== undefined) el.textContent = text; // textContent: text recenzie píšu zákazníci, nikdy ho nevkladáme ako HTML
+        return el;
+    };
+
+    summary.textContent = `${starsText(Math.round(data.average))} ${String(data.average).replace('.', ',')} / 5 (${data.count})`;
+
+    list.innerHTML = '';
+    data.reviews.forEach(r => {
+        const stars = Math.min(5, Math.max(0, Math.round(Number(r.stars) || 0)));
+        const card = makeEl('div', 'review-card');
+        card.appendChild(makeEl('div', 'review-stars', starsText(stars)));
+        card.appendChild(makeEl('p', 'review-text', r.text));
+        card.appendChild(makeEl('div', 'review-meta', `${r.name} · ${r.date}`));
+        if (r.reply) {
+            const reply = makeEl('div', 'review-reply');
+            reply.appendChild(makeEl('strong', null, 'Odpoveď holiča: '));
+            reply.appendChild(document.createTextNode(r.reply));
+            card.appendChild(reply);
+        }
+        list.appendChild(card);
+    });
+
+    section.hidden = false;
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     await refreshData();
+    loadReviews();
 
     // Navigácia týždňov
     document.getElementById('nextWeek').addEventListener('click', () => {
