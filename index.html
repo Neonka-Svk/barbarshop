@@ -32,13 +32,15 @@
     <header>
         <div class="header-content">
             <img src="barbar_logo.webp" alt="Logo" class="logo">
-            <h1>BARBAR SHOP</h1>
-            <p class="slogan">Holičstvo pre bojovníka</p>
+            <div class="brand-text">
+                <h1>BARBAR SHOP</h1>
+                <p class="slogan">Holičstvo pre bojovníka</p>
+            </div>
         </div>
     </header>
-    
-    <main>
-        <section class="booking-container">
+
+    <main class="layout">
+        <section class="booking-container" id="booking-section">
             <h2>Objednaj sa na "údržbu"</h2>
             <form id="booking-form">
                 <div class="input-group">
@@ -115,7 +117,13 @@
             </div>
         </section>
 
-        <section class="booking-container reviews-section" id="reviews-section" hidden>
+        <section class="booking-container wide-section gallery-section" id="gallery-section" hidden>
+            <h2>Naša práca</h2>
+            <div class="gallery-filters" id="gallery-filters" role="group" aria-label="Kategórie galérie"></div>
+            <div class="gallery-grid" id="gallery-grid"></div>
+        </section>
+
+        <section class="booking-container wide-section reviews-section" id="reviews-section" hidden>
             <h2>Čo hovoria bojovníci?</h2>
             <p class="reviews-summary" id="reviews-summary"></p>
             <div class="reviews-list" id="reviews-list"></div>
@@ -126,6 +134,14 @@
         <p>&copy; 2026 Barbar Shop. Sila a česť. | <a href="privacy.html">Ochrana osobných údajov</a></p>
     </footer>
     
+    <div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Galéria">
+        <button type="button" class="lightbox-close" id="lightbox-close" aria-label="Zavrieť">&times;</button>
+        <button type="button" class="lightbox-nav lightbox-prev" id="lightbox-prev" aria-label="Predchádzajúca">&#8249;</button>
+        <div class="lightbox-stage" id="lightbox-stage"></div>
+        <button type="button" class="lightbox-nav lightbox-next" id="lightbox-next" aria-label="Ďalšia">&#8250;</button>
+        <div class="lightbox-caption" id="lightbox-caption"></div>
+    </div>
+
     <script src="script.js"></script>
 </body>
 </html>

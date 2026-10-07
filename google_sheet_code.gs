@@ -758,7 +758,14 @@ function doGet(e) {
     console.error('Načítanie recenzií zlyhalo (kalendár ide ďalej):', err);
   }
 
-  return ContentService.createTextOutput(JSON.stringify({ bookings, custom: customRanges, defaultHours, reviews }))
+  let gallery = { items: [] };
+  try {
+    gallery = getGalleryItems_();
+  } catch (err) {
+    console.error('Načítanie galérie zlyhalo (kalendár ide ďalej):', err);
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({ bookings, custom: customRanges, defaultHours, reviews, gallery }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -1344,9 +1351,67 @@ function installReviewTrigger() {
   console.log('Trigger založený: sendReviewRequests, denne okolo 13:00.');
 }
 
+// ===================== GALÉRIA PRÁC (Google Disk) =====================
+// Holič nahrá fotky/videá do priečinka "web_photos" na Disku účtu, pod ktorým skript beží. Priečinok treba
+// zdieľať ako "Ktokoľvek s odkazom: Prezeranie", súbory v ňom to zdedia. Podpriečinky sa zobrazia ako
+// kategórie (filter nad galériou), súbory priamo v "web_photos" idú do "Všetko".
+// Zoznam sa na GALERIA_CACHE_SEKUND ukladá do cache, aby sa Disk nevolal pri každom načítaní stránky
+// (menu "Obnoviť galériu na webe" cache zmaže hneď).
+const GALERIA_PRIECINOK_NAZOV = 'web_photos';
+const GALERIA_PRIECINOK_ID = ''; // voliteľné: ID priečinka z jeho URL, ak by existovalo viac priečinkov s rovnakým názvom
+const GALERIA_MAX = 24;
+const GALERIA_CACHE_SEKUND = 300;
+const GALERIA_CACHE_KLUC = 'gallery_v1';
+
+function getGalleryFolder_() {
+  if (GALERIA_PRIECINOK_ID) return DriveApp.getFolderById(GALERIA_PRIECINOK_ID);
+  const it = DriveApp.getFoldersByName(GALERIA_PRIECINOK_NAZOV);
+  return it.hasNext() ? it.next() : null;
+}
+
+function collectGalleryFiles_(folder, category, out) {
+  const files = folder.getFiles();
+  while (files.hasNext()) {
+    const f = files.next();
+    const mime = String(f.getMimeType());
+    const type = /^image\//.test(mime) ? 'image' : (/^video\//.test(mime) ? 'video' : null);
+    if (!type) continue;
+    out.push({ id: f.getId(), type: type, name: f.getName().replace(/\.[^.]+$/, ''), category: category, updated: f.getLastUpdated().getTime() });
+  }
+}
+
+// Vráti {items: [{id, type: 'image'|'video', name, category}]}, najnovšie prvé.
+function getGalleryItems_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(GALERIA_CACHE_KLUC);
+  if (cached) return JSON.parse(cached);
+
+  let items = [];
+  const folder = getGalleryFolder_();
+  if (folder) {
+    collectGalleryFiles_(folder, '', items);
+    const subs = folder.getFolders();
+    while (subs.hasNext()) {
+      const sub = subs.next();
+      collectGalleryFiles_(sub, sub.getName(), items);
+    }
+    items.sort(function(a, b) { return b.updated - a.updated; });
+    items = items.slice(0, GALERIA_MAX);
+  }
+  const result = { items: items.map(function(i) { return { id: i.id, type: i.type, name: i.name, category: i.category }; }) };
+  try { cache.put(GALERIA_CACHE_KLUC, JSON.stringify(result), GALERIA_CACHE_SEKUND); } catch (err) {}
+  return result;
+}
+
+function clearGalleryCache() {
+  CacheService.getScriptCache().remove(GALERIA_CACHE_KLUC);
+  try { SpreadsheetApp.getActiveSpreadsheet().toast('Galéria sa na webe obnoví pri najbližšom načítaní stránky.', 'Galéria', 5); } catch (err) {}
+}
+
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('🛠️ Správa rezervácií')
     .addItem('Vymazať staré rezervácie (7+ dni)', 'cleanupOldReservations')
+    .addItem('Obnoviť galériu na webe', 'clearGalleryCache')
     .addToUi();
 
   // Staršiemu hárku "Recenzie" doplní stĺpec "Zmazať recenziu?" (hlavička + checkboxy).

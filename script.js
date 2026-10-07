@@ -310,7 +310,154 @@ function renderReviews(data) {
     section.hidden = false;
 }
 
+// --- GALÉRIA (fotky a videá z priečinka web_photos na Google Disku) ---
+// Rovnako ako recenzie prichádza v odpovedi s kalendárom (globalData.gallery) a sekcia je skrytá, kým nie sú dáta.
+const galleryThumbUrl = (id, width) => `https://drive.google.com/thumbnail?id=${id}&sz=w${width}`;
+const galleryVideoUrl = (id) => `https://drive.google.com/file/d/${id}/preview`;
+
+let galleryAll = [];
+let galleryShown = [];
+let galleryFilter = '';
+let lightboxIndex = -1;
+let lightboxOpener = null;
+
+function hideGallery() {
+    const section = document.getElementById('gallery-section');
+    const grid = document.getElementById('gallery-grid');
+    if (grid) grid.innerHTML = '';
+    if (section) section.hidden = true;
+}
+
+function renderGallery(data) {
+    const section = document.getElementById('gallery-section');
+    if (!section) return;
+
+    // ID ide do URL, preto prijmeme len bezpečné znaky; názvy sa vkladajú výlučne cez textContent / alt
+    const items = (data && Array.isArray(data.items) ? data.items : [])
+        .filter(i => i && /^[\w-]+$/.test(String(i.id)) && (i.type === 'image' || i.type === 'video'));
+    if (items.length === 0) {
+        galleryAll = [];
+        hideGallery();
+        return;
+    }
+
+    galleryAll = items;
+    const categories = [...new Set(items.map(i => i.category).filter(Boolean))];
+    if (galleryFilter && !categories.includes(galleryFilter)) galleryFilter = '';
+
+    const filters = document.getElementById('gallery-filters');
+    filters.innerHTML = '';
+    if (categories.length > 0) {
+        ['', ...categories].forEach(cat => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'gallery-filter';
+            btn.textContent = cat || 'Všetko';
+            btn.setAttribute('aria-pressed', String(cat === galleryFilter));
+            btn.addEventListener('click', () => { galleryFilter = cat; renderGallery(data); });
+            filters.appendChild(btn);
+        });
+    }
+
+    galleryShown = galleryFilter ? items.filter(i => i.category === galleryFilter) : items;
+    const grid = document.getElementById('gallery-grid');
+    grid.innerHTML = '';
+    galleryShown.forEach((item, index) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'gallery-item' + (item.type === 'video' ? ' is-video' : '');
+        btn.setAttribute('aria-label', (item.type === 'video' ? 'Prehrať video: ' : 'Zväčšiť fotku: ') + (item.name || ''));
+        const img = document.createElement('img');
+        img.src = galleryThumbUrl(item.id, 600);
+        img.alt = item.name || '';
+        img.loading = 'lazy';
+        img.referrerPolicy = 'no-referrer';
+        btn.appendChild(img);
+        btn.addEventListener('click', () => openLightbox(index, btn));
+        grid.appendChild(btn);
+    });
+
+    section.hidden = false;
+}
+
+function openLightbox(index, opener) {
+    const lb = document.getElementById('lightbox');
+    const stage = document.getElementById('lightbox-stage');
+    const item = galleryShown[index];
+    if (!lb || !item) return;
+
+    lightboxIndex = index;
+    if (opener) lightboxOpener = opener;
+    stage.innerHTML = '';
+    if (item.type === 'video') {
+        const frame = document.createElement('iframe');
+        frame.src = galleryVideoUrl(item.id);
+        frame.allow = 'autoplay; fullscreen';
+        frame.allowFullscreen = true;
+        frame.title = item.name || 'Video';
+        stage.appendChild(frame);
+    } else {
+        const img = document.createElement('img');
+        img.src = galleryThumbUrl(item.id, 1600);
+        img.alt = item.name || '';
+        img.referrerPolicy = 'no-referrer';
+        stage.appendChild(img);
+    }
+    document.getElementById('lightbox-caption').textContent = [item.name, item.category].filter(Boolean).join(' · ');
+    const multiple = galleryShown.length > 1;
+    document.getElementById('lightbox-prev').hidden = !multiple;
+    document.getElementById('lightbox-next').hidden = !multiple;
+
+    lb.hidden = false;
+    document.body.style.overflow = 'hidden';
+    document.getElementById('lightbox-close').focus();
+}
+
+function closeLightbox() {
+    const lb = document.getElementById('lightbox');
+    if (!lb || lb.hidden) return;
+    document.getElementById('lightbox-stage').innerHTML = ''; // zastaví aj prehrávané video
+    lb.hidden = true;
+    document.body.style.overflow = '';
+    lightboxIndex = -1;
+    if (lightboxOpener && document.contains(lightboxOpener)) lightboxOpener.focus();
+}
+
+function stepLightbox(delta) {
+    if (lightboxIndex < 0 || galleryShown.length < 2) return;
+    openLightbox((lightboxIndex + delta + galleryShown.length) % galleryShown.length);
+}
+
+function setupLightbox() {
+    const lb = document.getElementById('lightbox');
+    if (!lb) return;
+    document.getElementById('lightbox-close').addEventListener('click', closeLightbox);
+    document.getElementById('lightbox-prev').addEventListener('click', () => stepLightbox(-1));
+    document.getElementById('lightbox-next').addEventListener('click', () => stepLightbox(1));
+    lb.addEventListener('click', (e) => {
+        if (e.target === lb || e.target.id === 'lightbox-stage') closeLightbox();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (lb.hidden) return;
+        if (e.key === 'Escape') closeLightbox();
+        else if (e.key === 'ArrowLeft') stepLightbox(-1);
+        else if (e.key === 'ArrowRight') stepLightbox(1);
+    });
+    let touchX = null;
+    lb.addEventListener('touchstart', (e) => { touchX = e.changedTouches[0].clientX; }, { passive: true });
+    lb.addEventListener('touchend', (e) => {
+        if (touchX === null) return;
+        const dx = e.changedTouches[0].clientX - touchX;
+        touchX = null;
+        if (Math.abs(dx) > 50) stepLightbox(dx > 0 ? -1 : 1);
+    }, { passive: true });
+}
+
+// Na veľkej obrazovke je formulár a kalendár vedľa seba, takže automatické posúvanie stránky netreba.
+const isDesktopLayout = () => window.matchMedia('(min-width: 1000px)').matches;
+
 document.addEventListener('DOMContentLoaded', async () => {
+    setupLightbox();
     await refreshData();
 
     // Navigácia týždňov
@@ -322,7 +469,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     document.getElementById('btn-go-to-calendar').addEventListener('click', () => {
-        document.querySelector('.timetable-section').scrollIntoView({ behavior: 'smooth' });
+        if (!isDesktopLayout()) document.querySelector('.timetable-section').scrollIntoView({ behavior: 'smooth' });
     });
 
     document.getElementById('btn-clear-termin').addEventListener('click', () => {
@@ -380,6 +527,7 @@ async function refreshData() {
         if (response.ok) {
             globalData = await response.json();
             renderReviews(globalData.reviews);
+            renderGallery(globalData.gallery);
         }
     } catch (e) {
         console.error('Chyba dát', e);
@@ -582,7 +730,7 @@ function renderTimetable() {
 
                         updateSelectedTerminUI();
                         renderTimetable();
-                        document.querySelector('.booking-container').scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        if (!isDesktopLayout()) document.querySelector('.booking-container').scrollIntoView({ behavior: 'smooth', block: 'center' });
                     };
                 }
                 
