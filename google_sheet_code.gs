@@ -805,7 +805,14 @@ function handleEdit(e) {
   }
 
   // 1b. Zmazanie recenzie cez CHECKBOX v hárku "Recenzie" (posledný stĺpec)
-  if (sheetName === SHEET_RECENZIE && e.range.getColumn() === RECENZIE_HLAVICKA.length && e.range.getRow() > 1 && e.range.getValue() === true) {
+  if (sheetName === SHEET_RECENZIE && e.range.getColumn() === RECENZIE_STLPEC_SCHVALENE && e.range.getRow() > 1) {
+    // Ručné (od)schválenie v tabuľke: fotky recenzie sa podľa toho sprístupnia / znova zneprístupnia.
+    const rs = sheet.getRange(e.range.getRow(), 1, 1, RECENZIE_HLAVICKA.length).getValues()[0];
+    syncReviewPhotoSharing_(rs, e.range.getValue() === true);
+    return;
+  }
+
+  if (sheetName === SHEET_RECENZIE && e.range.getColumn() === RECENZIE_STLPEC_ZMAZAT && e.range.getRow() > 1 && e.range.getValue() === true) {
     const ui = SpreadsheetApp.getUi();
     const r = sheet.getRange(e.range.getRow(), 1, 1, RECENZIE_HLAVICKA.length).getValues()[0];
     const odpoved = ui.alert(
@@ -814,6 +821,7 @@ function handleEdit(e) {
       ui.ButtonSet.YES_NO
     );
     if (odpoved === ui.Button.YES) {
+      deleteReviewPhotos_(r);
       sheet.deleteRow(e.range.getRow());
     } else {
       e.range.setValue(false);
@@ -920,7 +928,11 @@ function processCancellations(cancellations, nonce) {
 // odklikne (stĺpec "Schválené") -> riadok sa objaví na webe (?action=reviews).
 // Jedna rezervácia = najviac jedna recenzia; rezervácia sa hľadá v "Rezervácie" aj v "Archív".
 const SHEET_RECENZIE = 'Recenzie';
-const RECENZIE_HLAVICKA = ['Identifikátor rezervácie', 'Dátum strihania', 'Hodnotenie (1-5)', 'Recenzia', 'Zobrazené meno', 'Odoslané (súhlas so zverejnením)', 'Schválené', 'Odpoveď holiča', 'Zmazať recenziu?'];
+const RECENZIE_HLAVICKA = ['Identifikátor rezervácie', 'Dátum strihania', 'Hodnotenie (1-5)', 'Recenzia', 'Zobrazené meno', 'Odoslané (súhlas so zverejnením)', 'Schválené', 'Odpoveď holiča', 'Zmazať recenziu?', 'Fotky (ID súborov)', 'Priečinok s fotkami'];
+const RECENZIE_STLPEC_SCHVALENE = 7;
+const RECENZIE_STLPEC_ZMAZAT = 9;
+const RECENZIE_STLPEC_FOTKY = 10;
+const RECENZIE_STLPEC_PRIECINOK = 11;
 const REVIEW_PLATNOST_DNI = 30;
 const REVIEW_MAX_ZOBRAZENYCH = 12;
 const REVIEW_STLPEC_MAILU = 10; // J v hárku Rezervácie: označí, že mail s recenziou už odišiel
@@ -949,13 +961,19 @@ function getReviewSheet_() {
   return sheet;
 }
 
-// Starší hárok "Recenzie" (ešte bez stĺpca "Zmazať recenziu?") sa sám doplní o hlavičku a checkboxy.
+// Starší hárok "Recenzie" sa sám doplní o nové stĺpce (hlavička, a pri "Zmazať recenziu?" aj checkboxy).
 function upgradeReviewSheet_(sheet) {
-  const stlpec = RECENZIE_HLAVICKA.length;
-  if (sheet.getRange(1, stlpec).getValue()) return;
-  sheet.getRange(1, stlpec).setValue(RECENZIE_HLAVICKA[stlpec - 1]);
-  sheet.getRange(1, stlpec - 1).copyFormatToRange(sheet, stlpec, stlpec, 1, 1);
-  if (sheet.getLastRow() > 1) sheet.getRange(2, stlpec, sheet.getLastRow() - 1, 1).insertCheckboxes();
+  if (!sheet.getRange(1, RECENZIE_STLPEC_ZMAZAT).getValue()) {
+    sheet.getRange(1, RECENZIE_STLPEC_ZMAZAT).setValue(RECENZIE_HLAVICKA[RECENZIE_STLPEC_ZMAZAT - 1]);
+    sheet.getRange(1, RECENZIE_STLPEC_ZMAZAT - 1).copyFormatToRange(sheet, RECENZIE_STLPEC_ZMAZAT, RECENZIE_STLPEC_ZMAZAT, 1, 1);
+    if (sheet.getLastRow() > 1) sheet.getRange(2, RECENZIE_STLPEC_ZMAZAT, sheet.getLastRow() - 1, 1).insertCheckboxes();
+  }
+  for (let c = RECENZIE_STLPEC_ZMAZAT + 1; c <= RECENZIE_HLAVICKA.length; c++) {
+    if (!sheet.getRange(1, c).getValue()) {
+      sheet.getRange(1, c).setValue(RECENZIE_HLAVICKA[c - 1]);
+      sheet.getRange(1, RECENZIE_STLPEC_ZMAZAT - 1).copyFormatToRange(sheet, c, c, 1, 1);
+    }
+  }
 }
 
 function slovakDateToYMD_(str) {
@@ -1027,6 +1045,153 @@ function suggestDisplayName_(full) {
   return parts[0] + ' ' + parts[parts.length - 1].charAt(0).toUpperCase() + '.';
 }
 
+// ---------- FOTKY K RECENZIÁM ----------
+// Bezpečnostný model (súbory od cudzích ľudí sú riziko):
+//  - prijímame LEN JPEG a overujeme ho na serveri (podpis súboru, ukončenie, rozmery z hlavičky); stránka fotku
+//    pred odoslaním vždy prekóduje do JPEG v canvase, čím zmizne aj poloha (EXIF) a čokoľvek skryté v origináli,
+//  - meno súboru, typ ani priečinok nikdy nebereme od klienta: súbory sa volajú foto-1.jpg ... a ukladajú sa
+//    do priečinka tejto recenzie v súkromnom priečinku "reviews",
+//  - najviac REVIEW_MAX_FOTIEK fotiek, limity na veľkosť a rozmery, jedna recenzia na rezerváciu,
+//  - súbory sú SÚKROMNÉ, kým holič recenziu neschváli; po schválení sa zdieľajú len tie, pri zmazaní recenzie
+//    sa priečinok s fotkami presunie do koša.
+const REVIEWS_PRIECINOK_NAZOV = 'reviews';
+const REVIEW_MAX_FOTIEK = 5;
+const REVIEW_FOTKA_MAX_BAJTOV = 1500000;
+const REVIEW_FOTKY_SPOLU_MAX_BAJTOV = 6000000;
+const REVIEW_FOTKA_MAX_ROZMER = 4096;
+
+function splitIds_(str) {
+  return String(str || '').split(',').map(function(s) { return s.trim(); }).filter(function(s) { return /^[\w-]{10,}$/.test(s); });
+}
+
+// Priečinok daného názvu, ktorého vlastníkom je účet, pod ktorým skript beží (nie niekto, kto nám podobný zdieľal).
+function getOwnedFolder_(name, vytvorit) {
+  const me = Session.getEffectiveUser().getEmail();
+  const it = DriveApp.getFoldersByName(name);
+  while (it.hasNext()) {
+    const f = it.next();
+    try {
+      if (!f.isTrashed() && f.getOwner() && f.getOwner().getEmail() === me) return f;
+    } catch (err) {}
+  }
+  return vytvorit ? DriveApp.getRootFolder().createFolder(name) : null;
+}
+
+// Overí jednu fotku (base64 text) ako JPEG. Vráti {ok:true, bytes} alebo {ok:false, error}.
+function validateJpegBase64_(b64) {
+  if (typeof b64 !== 'string' || b64.length < 100 || !/^[A-Za-z0-9+\/]+={0,2}$/.test(b64)) return { ok: false, error: 'má neplatný formát dát' };
+  if (b64.length > Math.ceil(REVIEW_FOTKA_MAX_BAJTOV * 4 / 3) + 8) return { ok: false, error: 'je príliš veľká' };
+  let raw;
+  try { raw = Utilities.base64Decode(b64); } catch (err) { return { ok: false, error: 'má neplatný formát dát' }; }
+  const n = raw.length;
+  if (n < 1000 || n > REVIEW_FOTKA_MAX_BAJTOV) return { ok: false, error: 'má neprijateľnú veľkosť' };
+  const b = function(i) { return raw[i] & 255; };
+
+  if (b(0) !== 0xFF || b(1) !== 0xD8 || b(2) !== 0xFF) return { ok: false, error: 'nie je obrázok JPEG' };
+  if (b(n - 2) !== 0xFF || b(n - 1) !== 0xD9) return { ok: false, error: 'je poškodená' };
+
+  // Prejdeme segmenty hlavičky až po SOF (tam sú rozmery). SOS/EOI pred SOF = poškodený súbor.
+  let i = 2, w = 0, h = 0;
+  while (i + 8 < n) {
+    if (b(i) !== 0xFF) return { ok: false, error: 'je poškodená' };
+    const m = b(i + 1);
+    if (m === 0xFF) { i++; continue; }
+    if (m === 0x01 || (m >= 0xD0 && m <= 0xD7)) { i += 2; continue; }
+    if (m === 0xD8 || m === 0xD9 || m === 0xDA) return { ok: false, error: 'je poškodená' };
+    const len = (b(i + 2) << 8) | b(i + 3);
+    if (len < 2) return { ok: false, error: 'je poškodená' };
+    const jeSof = m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC;
+    if (jeSof) {
+      h = (b(i + 5) << 8) | b(i + 6);
+      w = (b(i + 7) << 8) | b(i + 8);
+      break;
+    }
+    i += 2 + len;
+  }
+  if (!w || !h) return { ok: false, error: 'je poškodená' };
+  if (w < 16 || h < 16 || w > REVIEW_FOTKA_MAX_ROZMER || h > REVIEW_FOTKA_MAX_ROZMER || w * h > 12000000) return { ok: false, error: 'má neprijateľné rozmery' };
+  return { ok: true, bytes: raw };
+}
+
+// Overí všetky fotky naraz (nič sa nezapíše, kým nie sú v poriadku všetky). Vráti {ok, files|error}.
+function validateReviewPhotos_(photos, suhlas) {
+  if (photos === undefined || photos === null) return { ok: true, files: [] };
+  if (!Array.isArray(photos)) return { ok: false, error: 'Neplatné fotky.' };
+  if (photos.length === 0) return { ok: true, files: [] };
+  if (photos.length > REVIEW_MAX_FOTIEK) return { ok: false, error: 'K recenzii môžeš pridať najviac ' + REVIEW_MAX_FOTIEK + ' fotiek.' };
+  if (suhlas !== true) return { ok: false, error: 'K fotkám je potrebné potvrdiť súhlas so zverejnením.' };
+  const files = [];
+  let spolu = 0;
+  for (let i = 0; i < photos.length; i++) {
+    const v = validateJpegBase64_(photos[i]);
+    if (!v.ok) return { ok: false, error: 'Fotka č. ' + (i + 1) + ' ' + v.error + '.' };
+    spolu += v.bytes.length;
+    if (spolu > REVIEW_FOTKY_SPOLU_MAX_BAJTOV) return { ok: false, error: 'Fotky sú dokopy príliš veľké.' };
+    files.push(v.bytes);
+  }
+  return { ok: true, files: files };
+}
+
+// Uloží fotky do nového súkromného priečinka tejto recenzie: reviews/<dátum> - <meno> - <začiatok ID>/foto-N.jpg
+function saveReviewPhotos_(id, rez, zobrazeneMeno, files) {
+  const root = getOwnedFolder_(REVIEWS_PRIECINOK_NAZOV, true);
+  const datum = slovakDateToYMD_(rez.datum) || 'bez-datumu';
+  const meno = String(zobrazeneMeno).replace(/[^\p{L}\p{N} ._-]/gu, '_').slice(0, 30);
+  const folder = root.createFolder(datum + ' - ' + meno + ' - ' + id.slice(0, 8));
+  const fileIds = [];
+  try {
+    folder.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE);
+    files.forEach(function(bytes, i) {
+      const file = folder.createFile(Utilities.newBlob(bytes, 'image/jpeg', 'foto-' + (i + 1) + '.jpg'));
+      fileIds.push(file.getId());
+    });
+  } catch (err) {
+    try { folder.setTrashed(true); } catch (e2) {}
+    throw err;
+  }
+  return { folderId: folder.getId(), fileIds: fileIds };
+}
+
+// Po schválení sa fotky sprístupnia cez odkaz (aby ich vedel načítať web), po zrušení schválenia sú zasa súkromné.
+function syncReviewPhotoSharing_(row, schvalene) {
+  splitIds_(row[RECENZIE_STLPEC_FOTKY - 1]).forEach(function(fid) {
+    try {
+      const f = DriveApp.getFileById(fid);
+      if (schvalene) f.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      else f.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE);
+    } catch (err) {
+      console.error('Nastavenie zdieľania fotky zlyhalo:', fid, err);
+    }
+  });
+}
+
+// Pri zmazaní recenzie ide do koša celý priečinok s jej fotkami (a pre istotu aj jednotlivé súbory).
+function deleteReviewPhotos_(row) {
+  const m = String(row[RECENZIE_STLPEC_PRIECINOK - 1] || '').match(/folders\/([\w-]{10,})/);
+  if (m) {
+    try { DriveApp.getFolderById(m[1]).setTrashed(true); } catch (err) { console.error('Zmazanie priečinka s fotkami zlyhalo:', err); }
+  }
+  splitIds_(row[RECENZIE_STLPEC_FOTKY - 1]).forEach(function(fid) {
+    try { DriveApp.getFileById(fid).setTrashed(true); } catch (err) {}
+  });
+}
+
+// Náhľad fotiek na stránke pre holiča: fotky sú súkromné, preto idú priamo v stránke (base64), nie cez odkaz.
+function reviewPhotoPreviewHtml_(row) {
+  let out = '';
+  splitIds_(row[RECENZIE_STLPEC_FOTKY - 1]).forEach(function(fid) {
+    try {
+      const bytes = DriveApp.getFileById(fid).getBlob().getBytes();
+      if (bytes.length <= REVIEW_FOTKA_MAX_BAJTOV + 100000) {
+        out += '<img src="data:image/jpeg;base64,' + Utilities.base64Encode(bytes) + '" alt="Fotka k recenzii">';
+      }
+    } catch (err) {
+      console.error('Náhľad fotky zlyhal:', fid, err);
+    }
+  });
+  return out ? '<div class="photos">' + out + '</div>' : '';
+}
+
 // Volá sa zo stránky RecenziaPage.html cez google.script.run. Všetko sa overuje tu na serveri.
 function submitReview(payload) {
   try {
@@ -1041,14 +1206,20 @@ function submitReview(payload) {
     if (text.length < 5 || text.length > 1000) return { ok: false, error: 'Recenzia musí mať 5 až 1000 znakov.' };
     if (name.length < 1 || name.length > 40) return { ok: false, error: 'Zobrazené meno musí mať 1 až 40 znakov.' };
 
+    // Fotky sa overia pred čímkoľvek iným: ak je čo i len jedna zlá, neuloží sa nič.
+    const overene = validateReviewPhotos_(payload.photos, payload.photosConsent);
+    if (!overene.ok) return { ok: false, error: overene.error };
+
     const lock = LockService.getScriptLock();
     if (!lock.tryLock(15000)) return { ok: false, error: 'Server je vyťažený, skús to prosím o chvíľu znova.' };
 
+    let rezInfo = null;
     try {
       const rez = findReservationForReview_(id);
       if (!rez) return { ok: false, error: REVIEW_CHYBY.nenajdene };
       if (rez.chyba) return { ok: false, error: REVIEW_CHYBY[rez.chyba] };
       if (reviewExists_(id)) return { ok: false, error: REVIEW_CHYBY.existuje };
+      rezInfo = rez;
 
       const sheet = getReviewSheet_();
       const novyRiadok = [
@@ -1060,7 +1231,9 @@ function submitReview(payload) {
         Utilities.formatDate(new Date(), 'Europe/Bratislava', 'd.M.yyyy HH:mm:ss'),
         false,
         '',
-        false
+        false,
+        '',
+        ''
       ];
       // Najnovšia recenzia hore (hneď pod hlavičkou), nech si na nové a neodpovedané nezabudneš.
       let cielovyRiadok;
@@ -1073,10 +1246,36 @@ function submitReview(payload) {
         sheet.getRange(2, 1, 1, RECENZIE_HLAVICKA.length).setValues([novyRiadok]);
         cielovyRiadok = 2;
       }
-      sheet.getRange(cielovyRiadok, 7).insertCheckboxes();
-      sheet.getRange(cielovyRiadok, 9).insertCheckboxes();
+      sheet.getRange(cielovyRiadok, RECENZIE_STLPEC_SCHVALENE).insertCheckboxes();
+      sheet.getRange(cielovyRiadok, RECENZIE_STLPEC_ZMAZAT).insertCheckboxes();
     } finally {
       lock.releaseLock();
+    }
+
+    // Fotky sa nahrávajú až po uložení recenzie a mimo zámku (Disk je pomalý). Ak by zlyhali, text recenzie ostáva.
+    let pocetFotiek = 0;
+    let fotkyZlyhali = false;
+    if (overene.files.length > 0) {
+      let ulozene = null;
+      try {
+        ulozene = saveReviewPhotos_(id, rezInfo, name, overene.files);
+        const lock2 = LockService.getScriptLock();
+        if (!lock2.tryLock(15000)) throw new Error('Zámok sa nepodarilo získať.');
+        try {
+          const r = findReview_(id);
+          if (!r) throw new Error('Riadok recenzie sa nenašiel.');
+          const sheet2 = getReviewSheet_();
+          sheet2.getRange(r.row, RECENZIE_STLPEC_FOTKY).setValue(ulozene.fileIds.join(','));
+          sheet2.getRange(r.row, RECENZIE_STLPEC_PRIECINOK).setValue('https://drive.google.com/drive/folders/' + ulozene.folderId);
+        } finally {
+          lock2.releaseLock();
+        }
+        pocetFotiek = ulozene.fileIds.length;
+      } catch (err) {
+        console.error('Uloženie fotiek k recenzii zlyhalo:', err);
+        fotkyZlyhali = true;
+        if (ulozene) { try { DriveApp.getFolderById(ulozene.folderId).setTrashed(true); } catch (e2) {} }
+      }
     }
 
     try {
@@ -1088,12 +1287,12 @@ function submitReview(payload) {
       MailApp.sendEmail({ name: MAIL_NAZOV,
         to: MOJ_EMAIL,
         subject: 'Nová recenzia čaká na schválenie (' + stars + '/5)',
-        htmlBody: generateNewReviewEmailHtml_(name, stars, text, approveUrl, deleteUrl, sheetUrl)
+        htmlBody: generateNewReviewEmailHtml_(name, stars, text, approveUrl, deleteUrl, sheetUrl, pocetFotiek)
       });
     } catch (err) {
       console.error('Upozornenie na novú recenziu sa neodoslalo:', err);
     }
-    return { ok: true };
+    return { ok: true, fotkyZlyhali: fotkyZlyhali };
   } catch (err) {
     console.error('submitReview zlyhalo:', err);
     return { ok: false, error: 'Niečo sa pokazilo, skús to prosím znova.' };
@@ -1118,14 +1317,14 @@ function reviewApprovalToken_(id) {
   return reviewToken_(id, 'approve');
 }
 
-// Vráti {row, id, stars, text, name, approved, reply} alebo null.
+// Vráti {row, id, stars, text, name, approved, reply, raw} alebo null (raw = celý riadok z hárku).
 function findReview_(id) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_RECENZIE);
   if (!sheet || sheet.getLastRow() < 2) return null;
   const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, RECENZIE_HLAVICKA.length).getValues();
   for (let i = 0; i < rows.length; i++) {
     if (String(rows[i][0]) === id) {
-      return { row: i + 2, id: id, stars: Number(rows[i][2]), text: String(rows[i][3]), name: String(rows[i][4]), approved: rows[i][6] === true, reply: String(rows[i][7] || '') };
+      return { row: i + 2, id: id, stars: Number(rows[i][2]), text: String(rows[i][3]), name: String(rows[i][4]), approved: rows[i][6] === true, reply: String(rows[i][7] || ''), raw: rows[i] };
     }
   }
   return null;
@@ -1143,6 +1342,7 @@ function reviewAdminPage_(title, innerHtml) {
     'textarea{width:100%;box-sizing:border-box;min-height:80px;background:#1a1a1a;border:1px solid #444;color:#fff;padding:12px;border-radius:6px;font-family:inherit;font-size:16px}' +
     '.btn{display:block;width:100%;box-sizing:border-box;text-align:center;text-decoration:none;background:#2e7d32;color:#fff;border:none;padding:15px;font-size:16px;font-weight:bold;border-radius:6px;cursor:pointer;margin-top:18px}.btn:hover{background:#256528}' +
     '.link{display:block;text-align:center;color:#f0c419;margin-top:16px;font-size:14px}.ok{font-size:60px;color:#4caf50;text-align:center}p{line-height:1.5}' +
+    '.photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px;margin:14px 0}.photos img{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:6px;display:block}' +
     '</style></head><body><div class="card"><h2>' + escapeHtml(title) + '</h2>' + innerHtml + '</div></body></html>';
   return HtmlService.createHtmlOutput(html).setTitle('Recenzia | Barbar Shop').addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
@@ -1165,6 +1365,7 @@ function showApproveReviewPage_(id, token) {
   return reviewAdminPage_('Schváliť recenziu?',
     starsHtml_(r.stars) +
     '<div class="quote">' + escapeHtml(r.text) + '</div>' +
+    reviewPhotoPreviewHtml_(r.raw) +
     '<div class="who">Zobrazí sa ako: <strong>' + escapeHtml(r.name) + '</strong></div>' +
     '<form method="GET" action="' + escapeHtml(ScriptApp.getService().getUrl()) + '" target="_top">' +
     '<input type="hidden" name="action" value="doApproveReview"><input type="hidden" name="id" value="' + escapeHtml(id) + '"><input type="hidden" name="t" value="' + escapeHtml(token) + '">' +
@@ -1184,9 +1385,10 @@ function doApproveReview_(id, token, odpoved) {
     if (!r) return reviewAdminPage_('Recenzia sa nenašla', '<p>Recenzia už neexistuje.</p>');
     if (r.approved) return reviewAdminPage_('Už schválené', '<p>Táto recenzia už bola schválená.</p>');
     const sheet = getReviewSheet_();
-    sheet.getRange(r.row, 7).setValue(true);
+    sheet.getRange(r.row, RECENZIE_STLPEC_SCHVALENE).setValue(true);
     const reply = String(odpoved || '').trim().slice(0, 500);
     if (reply) sheet.getRange(r.row, 8).setValue(safeCell(reply));
+    syncReviewPhotoSharing_(r.raw, true);
   } finally {
     lock.releaseLock();
   }
@@ -1201,8 +1403,9 @@ function showDeleteReviewPage_(id, token) {
   return reviewAdminPage_('Zmazať recenziu?',
     starsHtml_(r.stars) +
     '<div class="quote">' + escapeHtml(r.text) + '</div>' +
+    reviewPhotoPreviewHtml_(r.raw) +
     '<div class="who">Od: <strong>' + escapeHtml(r.name) + '</strong>' + (r.approved ? ' (zatiaľ zverejnená na webe)' : '') + '</div>' +
-    '<p style="text-align:center;color:#ff8a80">Recenzia sa nenávratne odstráni z tabuľky aj z webu.</p>' +
+    '<p style="text-align:center;color:#ff8a80">Recenzia (aj jej fotky) sa nenávratne odstráni z tabuľky aj z webu.</p>' +
     '<form method="GET" action="' + escapeHtml(ScriptApp.getService().getUrl()) + '" target="_top">' +
     '<input type="hidden" name="action" value="doDeleteReview"><input type="hidden" name="id" value="' + escapeHtml(id) + '"><input type="hidden" name="t" value="' + escapeHtml(token) + '">' +
     '<button type="submit" class="btn" style="background:#d32f2f">ZMAZAŤ NAVŽDY</button></form>');
@@ -1216,6 +1419,7 @@ function doDeleteReview_(id, token) {
   try {
     const r = findReview_(id);
     if (!r) return reviewAdminPage_('Recenzia sa nenašla', '<p>Recenzia už neexistuje.</p>');
+    deleteReviewPhotos_(r.raw);
     getReviewSheet_().deleteRow(r.row);
   } finally {
     lock.releaseLock();
@@ -1223,7 +1427,7 @@ function doDeleteReview_(id, token) {
   return reviewAdminPage_('Zmazané', '<div class="ok">&#10003;</div><p style="text-align:center">Recenzia bola odstránená. Môžeš zatvoriť túto stránku.</p>');
 }
 
-function generateNewReviewEmailHtml_(name, stars, text, approveUrl, deleteUrl, sheetUrl) {
+function generateNewReviewEmailHtml_(name, stars, text, approveUrl, deleteUrl, sheetUrl, pocetFotiek) {
   let hviezdy = '';
   for (let i = 1; i <= 5; i++) {
     hviezdy += '<span style="color:' + (i <= stars ? '#f0c419' : '#d8d8d8') + ';">&#9733;</span>';
@@ -1242,6 +1446,7 @@ function generateNewReviewEmailHtml_(name, stars, text, approveUrl, deleteUrl, s
     '<p style="margin:0 0 20px 0;text-align:center;color:#555555;font-size:14px;">od <strong style="color:#1a1a1a;">' + escapeHtml(name) + '</strong> &middot; ' + stars + ' z 5</p>' +
     '<table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color:#fafafa;border:1px solid #eaeaea;border-left:4px solid #f0c419;border-radius:8px;border-collapse:separate;"><tr><td style="padding:18px 20px;color:#1a1a1a;font-size:16px;line-height:1.6;">' +
     escapeHtml(text).replace(/\n/g, '<br>') + '</td></tr></table>' +
+    (pocetFotiek > 0 ? '<p style="margin:14px 0 0 0;text-align:center;color:#555555;font-size:14px;">&#128247; K recenzii je priložených <strong>' + pocetFotiek + '</strong> ' + (pocetFotiek === 1 ? 'fotka' : (pocetFotiek < 5 ? 'fotky' : 'fotiek')) + ' (uvidíš ich v náhľade po kliknutí na Schváliť).</p>' : '') +
     '<div style="text-align:center;margin-top:28px;">' +
     btn(approveUrl, 'SCHVÁLIŤ', '#2e7d32', '#ffffff') +
     btn(deleteUrl, 'ZMAZAŤ', '#d32f2f', '#ffffff') +
@@ -1272,7 +1477,7 @@ function getPublicReviews_() {
   };
   const zoradene = approved.slice().sort(function(a, b) { return casOdoslania(b) - casOdoslania(a); });
   const reviews = zoradene.slice(0, REVIEW_MAX_ZOBRAZENYCH).map(function(r) {
-    return { stars: Number(r[2]), text: String(r[3]), name: String(r[4]), date: formatReviewDate_(r[1]), reply: String(r[7] || '') };
+    return { stars: Number(r[2]), text: String(r[3]), name: String(r[4]), date: formatReviewDate_(r[1]), reply: String(r[7] || ''), photos: splitIds_(r[RECENZIE_STLPEC_FOTKY - 1]) };
   });
   return { count: approved.length, average: Math.round(sum / approved.length * 10) / 10, reviews: reviews };
 }
@@ -1353,34 +1558,48 @@ function installReviewTrigger() {
 
 // ===================== GALÉRIA PRÁC (Google Disk) =====================
 // Holič nahrá fotky/videá do priečinka "web_photos" na Disku účtu, pod ktorým skript beží. Priečinok treba
-// zdieľať ako "Ktokoľvek s odkazom: Prezeranie", súbory v ňom to zdedia. Podpriečinky sa zobrazia ako
-// kategórie (filter nad galériou), súbory priamo v "web_photos" idú do "Všetko".
+// zdieľať ako "Ktokoľvek s odkazom: Prezeranie", súbory v ňom to zdedia (setupDriveFolders() to nastaví samo).
+// Všetky fotky a videá z priečinka (aj z jeho podpriečinkov) idú do jednej všeobecnej galérie.
 // Zoznam sa na GALERIA_CACHE_SEKUND ukladá do cache, aby sa Disk nevolal pri každom načítaní stránky
 // (menu "Obnoviť galériu na webe" cache zmaže hneď).
 const GALERIA_PRIECINOK_NAZOV = 'web_photos';
 const GALERIA_PRIECINOK_ID = ''; // voliteľné: ID priečinka z jeho URL, ak by existovalo viac priečinkov s rovnakým názvom
 const GALERIA_MAX = 24;
 const GALERIA_CACHE_SEKUND = 300;
-const GALERIA_CACHE_KLUC = 'gallery_v1';
+const GALERIA_CACHE_KLUC = 'gallery_v2';
 
+// Berie sa len priečinok, ktorého vlastníkom je tento účet (priečinok s rovnakým názvom, ktorý by nám niekto
+// cudzí zdieľal, sa ignoruje, aby nešiel na web cudzí obsah). Výnimka: ak je nastavené GALERIA_PRIECINOK_ID.
 function getGalleryFolder_() {
   if (GALERIA_PRIECINOK_ID) return DriveApp.getFolderById(GALERIA_PRIECINOK_ID);
-  const it = DriveApp.getFoldersByName(GALERIA_PRIECINOK_NAZOV);
-  return it.hasNext() ? it.next() : null;
+  return getOwnedFolder_(GALERIA_PRIECINOK_NAZOV, false);
 }
 
-function collectGalleryFiles_(folder, category, out) {
+// Spusti RAZ ručne z editora: vytvorí priečinky na Disku (ak ešte neexistujú). "web_photos" sa nastaví ako
+// verejne prezeraný cez odkaz (ide z neho galéria na webe), "reviews" ostáva súkromný (fotky z recenzií).
+function setupDriveFolders() {
+  const galeria = getOwnedFolder_(GALERIA_PRIECINOK_NAZOV, true);
+  galeria.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  const recenzie = getOwnedFolder_(REVIEWS_PRIECINOK_NAZOV, true);
+  recenzie.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE);
+  console.log('Priečinok web_photos: ' + galeria.getUrl());
+  console.log('Priečinok reviews: ' + recenzie.getUrl());
+}
+
+function collectGalleryFiles_(folder, out) {
   const files = folder.getFiles();
   while (files.hasNext()) {
     const f = files.next();
+    if (f.isTrashed()) continue;
     const mime = String(f.getMimeType());
     const type = /^image\//.test(mime) ? 'image' : (/^video\//.test(mime) ? 'video' : null);
     if (!type) continue;
-    out.push({ id: f.getId(), type: type, name: f.getName().replace(/\.[^.]+$/, ''), category: category, updated: f.getLastUpdated().getTime() });
+    out.push({ id: f.getId(), type: type, name: f.getName().replace(/\.[^.]+$/, ''), updated: f.getLastUpdated().getTime() });
   }
 }
 
-// Vráti {items: [{id, type: 'image'|'video', name, category}]}, najnovšie prvé.
+// Vráti {items: [{id, type: 'image'|'video', name}]}, najnovšie prvé. Berú sa súbory priamo v priečinku
+// aj v jeho podpriečinkoch (jedna úroveň), všetky idú do jednej všeobecnej galérie.
 function getGalleryItems_() {
   const cache = CacheService.getScriptCache();
   const cached = cache.get(GALERIA_CACHE_KLUC);
@@ -1389,16 +1608,16 @@ function getGalleryItems_() {
   let items = [];
   const folder = getGalleryFolder_();
   if (folder) {
-    collectGalleryFiles_(folder, '', items);
+    collectGalleryFiles_(folder, items);
     const subs = folder.getFolders();
     while (subs.hasNext()) {
       const sub = subs.next();
-      collectGalleryFiles_(sub, sub.getName(), items);
+      if (!sub.isTrashed()) collectGalleryFiles_(sub, items);
     }
     items.sort(function(a, b) { return b.updated - a.updated; });
     items = items.slice(0, GALERIA_MAX);
   }
-  const result = { items: items.map(function(i) { return { id: i.id, type: i.type, name: i.name, category: i.category }; }) };
+  const result = { items: items.map(function(i) { return { id: i.id, type: i.type, name: i.name }; }) };
   try { cache.put(GALERIA_CACHE_KLUC, JSON.stringify(result), GALERIA_CACHE_SEKUND); } catch (err) {}
   return result;
 }

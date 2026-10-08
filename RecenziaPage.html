@@ -65,7 +65,34 @@
     }
     textarea { min-height: 120px; resize: vertical; }
     textarea:focus, input[type="text"]:focus { outline: none; border-color: #f0c419; }
+    .photo-hint { font-size: 13px; color: #aaa; margin: 0 0 10px; line-height: 1.4; }
+    .photo-add {
+      display: inline-block;
+      background: transparent;
+      color: #f0c419;
+      border: 1px dashed #f0c419;
+      border-radius: 6px;
+      padding: 10px 16px;
+      font: inherit;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .photo-add:hover { background: rgba(240, 196, 25, 0.1); }
+    .photo-add[disabled] { opacity: 0.45; cursor: not-allowed; }
+    .photo-count { margin-left: 10px; font-size: 13px; color: #aaa; }
+    .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; margin-top: 12px; }
+    .photo-grid:empty { display: none; }
+    .photo-tile { position: relative; aspect-ratio: 1 / 1; border-radius: 6px; overflow: hidden; background: #1a1a1a; }
+    .photo-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .photo-remove {
+      position: absolute; top: 4px; right: 4px; width: 26px; height: 26px; padding: 0;
+      border: none; border-radius: 50%; background: rgba(0, 0, 0, 0.75); color: #fff;
+      font-size: 18px; line-height: 1; cursor: pointer;
+    }
+    .photo-remove:hover { background: #d32f2f; }
     .consent { display: flex; gap: 10px; align-items: flex-start; margin-top: 20px; font-size: 14px; line-height: 1.5; }
+    .consent[hidden] { display: none; }
     .consent input { margin-top: 3px; width: 18px; height: 18px; flex: 0 0 auto; }
     .consent a { color: #f0c419; }
     .btn {
@@ -113,6 +140,17 @@
       <label class="field" for="name">Zobraziť na webe ako *</label>
       <input type="text" id="name" maxlength="40" value="<?= meno ?>">
 
+      <label class="field">Fotky (nepovinné, max. 5)</label>
+      <p class="photo-hint">Fotky sa pred odoslaním zmenšia a zmažú sa z nich údaje ako poloha. Zverejnia sa až po schválení.</p>
+      <button type="button" class="photo-add" id="photoAdd">+ PRIDAŤ FOTKY</button><span class="photo-count" id="photoCount"></span>
+      <input type="file" id="photoInput" accept="image/*" multiple hidden>
+      <div class="photo-grid" id="photoGrid"></div>
+
+      <div class="consent" id="photoConsentBox" hidden>
+        <input type="checkbox" id="photoConsent">
+        <label for="photoConsent">Na fotkách som len ja alebo osoby, ktoré so zverejnením súhlasia, a nie je na nich nič nevhodné. Súhlasím so zverejnením fotiek spolu s recenziou na webe Barbar Shop.</label>
+      </div>
+
       <div class="consent">
         <input type="checkbox" id="consent">
         <label for="consent">Súhlasím so zverejnením mojej recenzie, hodnotenia a vyššie uvedeného mena na webe Barbar Shop. Súhlas môžem kedykoľvek odvolať (napíš nám a recenziu odstránime). Viac v <a href="<?= privacyUrl ?>" target="_blank" rel="noopener">zásadách ochrany osobných údajov</a>.</label>
@@ -126,6 +164,7 @@
       <div class="icon">&#10003;</div>
       <h2>Ďakujeme!</h2>
       <p>Recenziu sme prijali. Na webe sa zobrazí po schválení.</p>
+      <p id="photoWarn" hidden style="color:#ffcc80">Text recenzie sme uložili, ale fotky sa nepodarilo nahrať. Skús ich prosím poslať inak, alebo nám napíš.</p>
       <p>Môžeš zatvoriť túto stránku.</p>
     </div>
   </div>
@@ -147,38 +186,178 @@
     const errorEl = document.getElementById('error');
     const submitBtn = document.getElementById('submit');
 
+    // ---------- FOTKY ----------
+    // Každá fotka sa v prehliadači prekóduje do JPEG (zmenšená, bez EXIF/polohy, bez čohokoľvek skrytého
+    // v origináli) a až tá sa odošle. Server aj tak všetko znova overuje a prijme len JPEG.
+    const MAX_PHOTOS = 5;
+    const MAX_SIDE = 1600;
+    const MAX_BYTES = 1200000;
+    const MAX_RAW_BYTES = 30 * 1024 * 1024;
+
+    const photos = []; // { b64, url }
+    const photoInput = document.getElementById('photoInput');
+    const photoAdd = document.getElementById('photoAdd');
+    const photoGrid = document.getElementById('photoGrid');
+    const photoCount = document.getElementById('photoCount');
+    const photoConsentBox = document.getElementById('photoConsentBox');
+    let busy = false;
+
+    function renderPhotos() {
+      photoGrid.innerHTML = '';
+      photos.forEach(function (p, i) {
+        const tile = document.createElement('div');
+        tile.className = 'photo-tile';
+        const img = document.createElement('img');
+        img.src = p.url;
+        img.alt = 'Fotka ' + (i + 1);
+        const rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'photo-remove';
+        rm.setAttribute('aria-label', 'Odstrániť fotku ' + (i + 1));
+        rm.textContent = '×';
+        rm.addEventListener('click', function () {
+          URL.revokeObjectURL(p.url);
+          photos.splice(i, 1);
+          renderPhotos();
+        });
+        tile.appendChild(img);
+        tile.appendChild(rm);
+        photoGrid.appendChild(tile);
+      });
+      photoCount.textContent = photos.length ? photos.length + ' / ' + MAX_PHOTOS : '';
+      photoAdd.disabled = busy || photos.length >= MAX_PHOTOS;
+      photoConsentBox.hidden = photos.length === 0;
+    }
+
+    function loadBitmap(file) {
+      if (window.createImageBitmap) {
+        return createImageBitmap(file, { imageOrientation: 'from-image' }).catch(function () { return loadViaImg(file); });
+      }
+      return loadViaImg(file);
+    }
+
+    function loadViaImg(file) {
+      return new Promise(function (resolve, reject) {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = function () { URL.revokeObjectURL(url); resolve(img); };
+        img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('decode')); };
+        img.src = url;
+      });
+    }
+
+    function canvasToBlob(canvas, quality) {
+      return new Promise(function (resolve) { canvas.toBlob(resolve, 'image/jpeg', quality); });
+    }
+
+    function blobToBase64(blob) {
+      return new Promise(function (resolve, reject) {
+        const fr = new FileReader();
+        fr.onload = function () { resolve(String(fr.result).split(',')[1] || ''); };
+        fr.onerror = function () { reject(new Error('read')); };
+        fr.readAsDataURL(blob);
+      });
+    }
+
+    async function fileToJpeg(file) {
+      if (!/^image\//.test(file.type)) throw new Error('"' + file.name + '" nie je obrázok.');
+      if (file.size > MAX_RAW_BYTES) throw new Error('"' + file.name + '" je príliš veľká.');
+      let bitmap;
+      try { bitmap = await loadBitmap(file); } catch (e) { throw new Error('Fotku "' + file.name + '" sa nepodarilo načítať (skús JPEG alebo PNG).'); }
+      const srcW = bitmap.width, srcH = bitmap.height;
+      if (!srcW || !srcH || srcW < 16 || srcH < 16) throw new Error('Fotka "' + file.name + '" je príliš malá.');
+
+      let scale = Math.min(1, MAX_SIDE / Math.max(srcW, srcH));
+      let quality = 0.85;
+      let blob = null;
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(16, Math.round(srcW * scale));
+        canvas.height = Math.max(16, Math.round(srcH * scale));
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff'; // priehľadnosť (PNG) by sa v JPEG zmenila na čiernu
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        blob = await canvasToBlob(canvas, quality);
+        if (blob && blob.size <= MAX_BYTES) break;
+        quality = Math.max(0.5, quality - 0.1);
+        scale *= 0.85;
+      }
+      if (bitmap.close) bitmap.close();
+      if (!blob || blob.size > MAX_BYTES) throw new Error('Fotku "' + file.name + '" sa nepodarilo dostatočne zmenšiť.');
+      return { b64: await blobToBase64(blob), url: URL.createObjectURL(blob) };
+    }
+
+    photoAdd.addEventListener('click', function () { photoInput.click(); });
+
+    photoInput.addEventListener('change', async function () {
+      const files = Array.from(photoInput.files || []);
+      photoInput.value = '';
+      errorEl.textContent = '';
+      if (!files.length) return;
+
+      const free = MAX_PHOTOS - photos.length;
+      if (files.length > free) errorEl.textContent = 'Pridať sa dá najviac ' + MAX_PHOTOS + ' fotiek, zvyšné sa preskočili.';
+
+      busy = true;
+      photoAdd.disabled = true;
+      photoCount.textContent = 'Spracúvam fotky...';
+      for (const file of files.slice(0, free)) {
+        try {
+          photos.push(await fileToJpeg(file));
+        } catch (e) {
+          errorEl.textContent = e.message;
+        }
+      }
+      busy = false;
+      renderPhotos();
+    });
+
+    // ---------- ODOSLANIE ----------
     submitBtn.addEventListener('click', function () {
+      if (busy) return;
       errorEl.textContent = '';
       const text = document.getElementById('text').value.trim();
       const name = document.getElementById('name').value.trim();
       const consent = document.getElementById('consent').checked;
+      const photosConsent = document.getElementById('photoConsent').checked;
 
       if (!stars) { errorEl.textContent = 'Vyber počet hviezdičiek.'; return; }
       if (text.length < 5) { errorEl.textContent = 'Napíš aspoň pár slov (min. 5 znakov).'; return; }
       if (!name) { errorEl.textContent = 'Doplň meno, ktoré sa zobrazí na webe.'; return; }
+      if (photos.length > 0 && !photosConsent) { errorEl.textContent = 'Pri fotkách treba potvrdiť súhlas s ich zverejnením.'; return; }
       if (!consent) { errorEl.textContent = 'Bez súhlasu so zverejnením recenziu nevieme odoslať.'; return; }
 
       submitBtn.disabled = true;
-      submitBtn.textContent = 'ODOSÍELAM...';
+      photoAdd.disabled = true;
+      submitBtn.textContent = photos.length ? 'NAHRÁVAM...' : 'ODOSÍELAM...';
+
+      const restore = function () {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'ODOSLAŤ RECENZIU';
+        renderPhotos();
+      };
 
       google.script.run
         .withSuccessHandler(function (res) {
           if (res && res.ok) {
             document.getElementById('formView').hidden = true;
             document.getElementById('doneView').hidden = false;
+            if (res.fotkyZlyhali) document.getElementById('photoWarn').hidden = false;
           } else {
             errorEl.textContent = (res && res.error) ? res.error : 'Niečo sa pokazilo, skús to prosím znova.';
-            submitBtn.disabled = false;
-            submitBtn.textContent = 'ODOSLAŤ RECENZIU';
+            restore();
           }
         })
         .withFailureHandler(function () {
           errorEl.textContent = 'Spojenie zlyhalo, skús to prosím znova.';
-          submitBtn.disabled = false;
-          submitBtn.textContent = 'ODOSLAŤ RECENZIU';
+          restore();
         })
-        .submitReview({ id: REVIEW_ID, stars: stars, text: text, name: name, consent: consent });
+        .submitReview({
+          id: REVIEW_ID, stars: stars, text: text, name: name, consent: consent,
+          photos: photos.map(function (p) { return p.b64; }), photosConsent: photosConsent
+        });
     });
-  </script>
+</script>
 </body>
 </html>

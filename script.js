@@ -304,20 +304,27 @@ function renderReviews(data) {
             reply.appendChild(document.createTextNode(r.reply));
             card.appendChild(reply);
         }
+        const photos = (Array.isArray(r.photos) ? r.photos : []).filter(isSafeDriveId).map(id => ({ id, type: 'image', name: 'Fotka k recenzii od ' + r.name }));
+        if (photos.length > 0) {
+            const strip = makeEl('div', 'review-photos');
+            photos.forEach((p, i) => strip.appendChild(buildMediaButton(p, photos, i, 'review-photo', 300)));
+            card.insertBefore(strip, card.querySelector('.review-meta'));
+        }
         list.appendChild(card);
     });
 
     section.hidden = false;
 }
 
-// --- GALÉRIA (fotky a videá z priečinka web_photos na Google Disku) ---
+// --- GALÉRIA (fotky a videá z priečinka web_photos na Google Disku) + fotky v recenziách ---
 // Rovnako ako recenzie prichádza v odpovedi s kalendárom (globalData.gallery) a sekcia je skrytá, kým nie sú dáta.
+// Vo vizuáli stránky nie je nikde odkaz na Disk: obrázky sa len načítavajú z Googlu a video sa prehráva
+// v lightboxe, kde sú odkazy na Disk (vyskakovacie okno prehrávača) zakryté.
 const galleryThumbUrl = (id, width) => `https://drive.google.com/thumbnail?id=${id}&sz=w${width}`;
 const galleryVideoUrl = (id) => `https://drive.google.com/file/d/${id}/preview`;
+const isSafeDriveId = (id) => /^[\w-]{10,}$/.test(String(id));
 
-let galleryAll = [];
-let galleryShown = [];
-let galleryFilter = '';
+let lightboxItems = [];
 let lightboxIndex = -1;
 let lightboxOpener = null;
 
@@ -328,74 +335,63 @@ function hideGallery() {
     if (section) section.hidden = true;
 }
 
+// Tlačidlo s miniatúrou, ktoré po kliknutí otvorí lightbox na danej položke zoznamu.
+function buildMediaButton(item, list, index, extraClass, thumbWidth) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = extraClass + (item.type === 'video' ? ' is-video' : '');
+    btn.setAttribute('aria-label', (item.type === 'video' ? 'Prehrať video: ' : 'Zväčšiť fotku: ') + (item.name || ''));
+    const img = document.createElement('img');
+    img.src = galleryThumbUrl(item.id, thumbWidth);
+    img.alt = item.name || '';
+    img.loading = 'lazy';
+    img.referrerPolicy = 'no-referrer';
+    btn.appendChild(img);
+    btn.addEventListener('click', () => openLightbox(list, index, btn));
+    return btn;
+}
+
 function renderGallery(data) {
     const section = document.getElementById('gallery-section');
     if (!section) return;
 
     // ID ide do URL, preto prijmeme len bezpečné znaky; názvy sa vkladajú výlučne cez textContent / alt
     const items = (data && Array.isArray(data.items) ? data.items : [])
-        .filter(i => i && /^[\w-]+$/.test(String(i.id)) && (i.type === 'image' || i.type === 'video'));
+        .filter(i => i && isSafeDriveId(i.id) && (i.type === 'image' || i.type === 'video'));
     if (items.length === 0) {
-        galleryAll = [];
         hideGallery();
         return;
     }
 
-    galleryAll = items;
-    const categories = [...new Set(items.map(i => i.category).filter(Boolean))];
-    if (galleryFilter && !categories.includes(galleryFilter)) galleryFilter = '';
-
-    const filters = document.getElementById('gallery-filters');
-    filters.innerHTML = '';
-    if (categories.length > 0) {
-        ['', ...categories].forEach(cat => {
-            const btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'gallery-filter';
-            btn.textContent = cat || 'Všetko';
-            btn.setAttribute('aria-pressed', String(cat === galleryFilter));
-            btn.addEventListener('click', () => { galleryFilter = cat; renderGallery(data); });
-            filters.appendChild(btn);
-        });
-    }
-
-    galleryShown = galleryFilter ? items.filter(i => i.category === galleryFilter) : items;
     const grid = document.getElementById('gallery-grid');
     grid.innerHTML = '';
-    galleryShown.forEach((item, index) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'gallery-item' + (item.type === 'video' ? ' is-video' : '');
-        btn.setAttribute('aria-label', (item.type === 'video' ? 'Prehrať video: ' : 'Zväčšiť fotku: ') + (item.name || ''));
-        const img = document.createElement('img');
-        img.src = galleryThumbUrl(item.id, 600);
-        img.alt = item.name || '';
-        img.loading = 'lazy';
-        img.referrerPolicy = 'no-referrer';
-        btn.appendChild(img);
-        btn.addEventListener('click', () => openLightbox(index, btn));
-        grid.appendChild(btn);
-    });
-
+    items.forEach((item, index) => grid.appendChild(buildMediaButton(item, items, index, 'gallery-item', 600)));
     section.hidden = false;
 }
 
-function openLightbox(index, opener) {
+function openLightbox(list, index, opener) {
     const lb = document.getElementById('lightbox');
     const stage = document.getElementById('lightbox-stage');
-    const item = galleryShown[index];
+    const item = list && list[index];
     if (!lb || !item) return;
 
+    lightboxItems = list;
     lightboxIndex = index;
     if (opener) lightboxOpener = opener;
     stage.innerHTML = '';
     if (item.type === 'video') {
+        const wrap = document.createElement('div');
+        wrap.className = 'video-wrap';
         const frame = document.createElement('iframe');
         frame.src = galleryVideoUrl(item.id);
         frame.allow = 'autoplay; fullscreen';
         frame.allowFullscreen = true;
         frame.title = item.name || 'Video';
-        stage.appendChild(frame);
+        const mask = document.createElement('div'); // zakryje tlačidlo prehrávača, ktoré by otvorilo Disk
+        mask.className = 'video-mask';
+        wrap.appendChild(frame);
+        wrap.appendChild(mask);
+        stage.appendChild(wrap);
     } else {
         const img = document.createElement('img');
         img.src = galleryThumbUrl(item.id, 1600);
@@ -403,8 +399,8 @@ function openLightbox(index, opener) {
         img.referrerPolicy = 'no-referrer';
         stage.appendChild(img);
     }
-    document.getElementById('lightbox-caption').textContent = [item.name, item.category].filter(Boolean).join(' · ');
-    const multiple = galleryShown.length > 1;
+    document.getElementById('lightbox-caption').textContent = item.name || '';
+    const multiple = list.length > 1;
     document.getElementById('lightbox-prev').hidden = !multiple;
     document.getElementById('lightbox-next').hidden = !multiple;
 
@@ -424,8 +420,8 @@ function closeLightbox() {
 }
 
 function stepLightbox(delta) {
-    if (lightboxIndex < 0 || galleryShown.length < 2) return;
-    openLightbox((lightboxIndex + delta + galleryShown.length) % galleryShown.length);
+    if (lightboxIndex < 0 || lightboxItems.length < 2) return;
+    openLightbox(lightboxItems, (lightboxIndex + delta + lightboxItems.length) % lightboxItems.length);
 }
 
 function setupLightbox() {

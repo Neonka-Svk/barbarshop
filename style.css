@@ -902,6 +902,43 @@ main {
     color: var(--gold);
 }
 
+.review-photos {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 8px 0;
+}
+
+.review-photo {
+    position: relative;
+    width: 64px;
+    height: 64px;
+    padding: 0;
+    border: 1px solid rgba(240, 196, 25, 0.35);
+    border-radius: 4px;
+    background: #2b1d16;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.review-photo img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.2s ease;
+}
+
+.review-photo:hover img,
+.review-photo:focus-visible img {
+    transform: scale(1.1);
+}
+
+.review-photo:focus-visible {
+    outline: 2px solid var(--gold);
+    outline-offset: 2px;
+}
+
 /* odkaz v pätičke (Ochrana osobných údajov) */
 footer a {
     color: var(--gold);
@@ -912,37 +949,6 @@ footer a:hover {
 }
 
 /* --- GALÉRIA --- */
-.gallery-filters {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 8px;
-    margin: 0 0 16px 0;
-}
-
-.gallery-filters:empty {
-    display: none;
-}
-
-.gallery-filter {
-    background: transparent;
-    color: var(--gold);
-    border: 1px solid var(--gold);
-    border-radius: 999px;
-    padding: 6px 14px;
-    font: inherit;
-    font-size: 0.85rem;
-    font-weight: bold;
-    cursor: pointer;
-    transition: background 0.15s, color 0.15s;
-}
-
-.gallery-filter:hover,
-.gallery-filter[aria-pressed="true"] {
-    background: var(--gold);
-    color: var(--dark);
-}
-
 .gallery-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -1024,13 +1030,29 @@ footer a:hover {
     border-radius: 4px;
 }
 
-.lightbox-stage iframe {
+/* video z Disku: tmavý štvorec cez pravý horný roh prehrávača zakryje jeho tlačidlo, ktoré by otvorilo Disk */
+.video-wrap {
+    position: relative;
     width: min(100%, 1100px);
     aspect-ratio: 16 / 9;
     max-height: 100%;
+}
+
+.video-wrap iframe {
+    width: 100%;
+    height: 100%;
     border: 0;
     border-radius: 4px;
     background: #000;
+}
+
+.video-mask {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 72px;
+    height: 56px;
+    background: #202124;
 }
 
 .lightbox-close,
