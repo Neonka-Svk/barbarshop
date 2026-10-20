@@ -1092,11 +1092,14 @@ function renderPending() {
         hint = `Klikni v ňom na POTVRDIŤ TERMÍN. Bez potvrdenia sa termín o ${Math.round(ps.holdMs / 60000)} minút uvoľní. Nevidíš ho? Pozri aj priečinok Spam alebo Promo akcie.`;
     } else if (st === 'confirmed') {
         title = 'Termín je potvrdený ✓';
-        text = `Sila a česť, ${pending.meno}! Tešíme sa na teba.`;
+        text = `Sila a česť, ${pending.meno}! Tešíme sa na teba na B02/321, Purkyňovy koleje.`;
         hint = 'Ak budeš potrebovať termín zrušiť, použi tlačidlo v maile.';
     } else if (st === 'cancelled') {
         title = 'Rezervácia je zrušená';
-        text = 'Termín je znova voľný.';
+        text = 'Termín je znova voľný. Ak chceš iný, vyber si ho v kalendári.';
+    } else if (st === 'gone') {
+        title = 'Rezervácia už nie je aktívna';
+        text = 'Bola zrušená alebo nepotvrdená včas, termín je znova voľný.';
     } else {
         title = 'Čas na potvrdenie vypršal';
         text = 'Termín sa uvoľnil, lebo nebol potvrdený včas. Ak ho stále chceš, vyber si ho znova.';

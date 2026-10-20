@@ -8,7 +8,8 @@
 const SHEET_NAME = 'Rezervácie';
 const SHEET_CUSTOM = 'Otv. hodiny mimo bežné';
 const SHEET_DEFAULT = 'Bežné otv. hodiny';
-const MOJ_EMAIL = 'matusjacko1@gmail.com';
+const EMAIL_BARBAR = 'matusjacko1@gmail.com';
+const MIESTO = 'B02/321, Purkyňovy koleje'; // kde sa strihá (maily, stránka potvrdenia; na webe v index.html)
 const MAIL_NAZOV = 'Barbar Shop'; // meno odosielateľa, ktoré uvidia príjemcovia vo svojej schránke
 
 // --- VALIDÁCIA VSTUPU ---
@@ -202,7 +203,7 @@ function mailQuotaLow_() {
 function sendBarberMailOrDefer_(mail, polozka) {
   if (!mailQuotaLow_()) {
     try {
-      MailApp.sendEmail(Object.assign({ name: MAIL_NAZOV, to: MOJ_EMAIL }, mail));
+      MailApp.sendEmail(Object.assign({ name: MAIL_NAZOV, to: EMAIL_BARBAR }, mail));
       return 'odoslane';
     } catch (err) {
       console.error('Mail holičovi neodišiel, ide do večerného súhrnu:', err);
@@ -249,7 +250,7 @@ function sendBarberDigest() {
   try {
     const n = sheet.getLastRow() - 1;
     const rows = sheet.getRange(2, 1, n, SUHRN_HLAVICKA.length).getValues();
-    MailApp.sendEmail({ name: MAIL_NAZOV, to: MOJ_EMAIL,
+    MailApp.sendEmail({ name: MAIL_NAZOV, to: EMAIL_BARBAR,
       subject: 'Súhrn dňa - Barbar Shop (' + rows.length + ')',
       htmlBody: generateDigestEmailHtml_(rows, kvota)
     });
@@ -2066,6 +2067,19 @@ function activePendingBookings_(now) {
   return out;
 }
 
+// Čo sa stalo s rezerváciou, ktorá už nečaká: potvrdená / zrušená (panel, odkaz v maile) / vypršala.
+function finishedState_(id) {
+  if (isConfirmed_(id)) return 'confirmed';
+  const arch = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_ARCHIV);
+  if (arch && arch.getLastRow() > 1) {
+    const data = arch.getRange(2, 1, arch.getLastRow() - 1, ARCHIV_HLAVICKA.length).getValues();
+    for (let i = data.length - 1; i >= 0; i--) {
+      if (String(data[i][6]) === String(id)) return /^Zrušená/.test(String(data[i][8])) ? 'cancelled' : 'expired';
+    }
+  }
+  return 'gone';
+}
+
 function isConfirmed_(id) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
   if (!sheet) return false;
@@ -2180,7 +2194,7 @@ function handlePendingAction_(data) {
   // Stav sa pýta často (stránka sa každých pár sekúnd pozrie, či už zákazník klikol v maile), preto bez zámku.
   if (action === 'status') {
     const found = findPending_(id);
-    if (!found.p) return { state: isConfirmed_(id) ? 'confirmed' : 'gone' };
+    if (!found.p) return { state: finishedState_(id) };
     if (String(found.p.r[11]) !== hashKey_(key)) return { error: 'Neplatná relácia.' };
     const now = Date.now();
     if (!isPendingActive_(found.p.r, now)) return { state: 'expired' };
@@ -2193,7 +2207,7 @@ function handlePendingAction_(data) {
   try {
     const now = Date.now();
     const found = findPending_(id);
-    if (!found.p) return { state: isConfirmed_(id) ? 'confirmed' : 'gone' };
+    if (!found.p) return { state: finishedState_(id) };
     if (String(found.p.r[11]) !== hashKey_(key)) return { error: 'Neplatná relácia.' };
 
     if (!isPendingActive_(found.p.r, now)) {
@@ -2272,7 +2286,7 @@ function processPendingReservations() {
 // --- Potvrdenie odkazom z mailu (2 kroky, aby rezerváciu nepotvrdil skener odkazov v pošte) ---
 function bookingDetailsHtml_(r) {
   return '<div class="details"><b>Bojovník:</b> ' + escapeHtml(plain_(r[3])) + '<br><b>Služba:</b> ' + escapeHtml(plain_(r[4])) +
-    '<br><b>Termín:</b> ' + escapeHtml(plain_(r[0])) + ' o ' + escapeHtml(plain_(r[1], 'HH:mm')) + '</div>';
+    '<br><b>Termín:</b> ' + escapeHtml(plain_(r[0])) + ' o ' + escapeHtml(plain_(r[1], 'HH:mm')) + '<br><b>Kde:</b> ' + escapeHtml(MIESTO) + '</div>';
 }
 
 function bookingPage_(title, innerHtml) {
@@ -2598,7 +2612,7 @@ function checkUpcomingConflicts() {
           const bodyHtml = generateReminderEmailHtml(meno, casString, Math.round(timeDiff), dovodText, resId, baseUrl);
           
           MailApp.sendEmail({ name: MAIL_NAZOV, 
-            to: MOJ_EMAIL, 
+            to: EMAIL_BARBAR, 
             subject: isEarlyMorningTomorrow ? `🌙 VEČERNÁ HLIADKA: Ranný konflikt!` : `⏰ BUDÍČEK: Zblúdilý bojovník na ceste!`, 
             htmlBody: bodyHtml 
           });

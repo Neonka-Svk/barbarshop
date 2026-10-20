@@ -1378,3 +1378,14 @@ footer a:hover {
     font-weight: bold;
     cursor: pointer;
 }
+
+/* miesto strihania pod nadpisom formulára */
+.place-note {
+    margin: -6px 0 18px 0;
+    text-align: center;
+    font-size: 0.95rem;
+}
+
+.place-note strong {
+    color: var(--gold);
+}
