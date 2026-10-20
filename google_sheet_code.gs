@@ -799,10 +799,10 @@ function doGet(e) {
 
   // --- AKCIA 3e: POTVRDENIE TERMÍNU ZÁKAZNÍKOM (odkaz z mailu, 2 kroky) ---
   if (action === 'confirmPage') {
-    return showConfirmPage_(id, e.parameter.c);
+    return showConfirmPage_(id, e.parameter.kod);
   }
   if (action === 'doConfirm') {
-    return doConfirm_(id, e.parameter.c);
+    return doConfirm_(id, e.parameter.kod);
   }
 
   // --- AKCIA 3d: SCHVÁLENIE RECENZIE HOLIČOM (odkaz z mailu, 2 kroky) ---
@@ -2089,7 +2089,8 @@ function sendPendingMail_(r) {
   sablona.sluzba = plain_(r[4]);
   sablona.datum = datum;
   sablona.cas = cas;
-  sablona.confirmUrl = baseUrl + '?action=confirmPage&id=' + id + '&c=' + r[10];
+  // Pozor: parametre 'c' a 'sid' má Apps Script vyhradené (Google URL s nimi ani nepustí ku skriptu), preto 'kod'.
+  sablona.confirmUrl = baseUrl + '?action=confirmPage&id=' + id + '&kod=' + r[10];
   sablona.cancelUrl = baseUrl + '?action=cancelPage&id=' + id + '&role=klient';
   sablona.viewUrl = baseUrl + '?action=viewEmail&id=' + id;
   sablona.vyzvaText = 'Ak si o tento termín nežiadal alebo ho chceš zrušiť, klikni na tlačidlo nižšie:';
