@@ -1389,3 +1389,12 @@ footer a:hover {
 .place-note strong {
     color: var(--gold);
 }
+
+/* výber služby: kým nie je nič zvolené, text vyzerá ako placeholder */
+select:invalid {
+    color: #999;
+}
+
+select option {
+    color: white;
+}

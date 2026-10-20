@@ -856,6 +856,12 @@ document.getElementById("booking-form").addEventListener("submit", async functio
         return;
     }
 
+    if (!sluzba) {
+        showToast("Vyber si službu, bojovník!", "error");
+        document.getElementById("service").focus();
+        return;
+    }
+
     if (!datum || !cas) {
         showToast("Najprv si musíš zvoliť termín v tabuľke obsadenosti!", "error");
         document.querySelector('.timetable-section').scrollIntoView({ behavior: 'smooth' });
