@@ -1868,6 +1868,24 @@ function installReviewTrigger() {
   console.log('Trigger založený: sendReviewRequests, denne okolo 13:00.');
 }
 
+// Spusti RAZ ručne z editora pod účtom, z ktorého majú chodiť maily (roman.barbarshop): založí VŠETKY triggery
+// projektu pod týmto účtom. Triggery bežia (a maily posielajú) pod tým, kto ich založil. Staré triggery tohto
+// účtu sa najprv zmažú, takže opakované spustenie nič nezdvojí. Triggery INÉHO účtu odtiaľto zmazať nejde:
+// treba ich zmazať v jeho profile (Apps Script -> Spúšťače).
+function installAllTriggers() {
+  const moje = ['handleEdit', 'checkUpcomingConflicts', 'cleanupOldReservations', 'sendReviewRequests'];
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (moje.indexOf(t.getHandlerFunction()) !== -1) ScriptApp.deleteTrigger(t);
+  });
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  ScriptApp.newTrigger('handleEdit').forSpreadsheet(ss).onEdit().create();
+  ScriptApp.newTrigger('checkUpcomingConflicts').timeBased().everyMinutes(10).create();
+  ScriptApp.newTrigger('cleanupOldReservations').timeBased().everyDays(1).atHour(0).inTimezone('Europe/Bratislava').create();
+  ScriptApp.newTrigger('sendReviewRequests').timeBased().everyDays(1).atHour(13).inTimezone('Europe/Bratislava').create();
+  installSpeedTriggers(); // cache, nepotvrdené rezervácie, večerný súhrn
+  console.log('Všetky triggery založené pod účtom ' + Session.getEffectiveUser().getEmail() + ': handleEdit (pri úprave), checkUpcomingConflicts (každých 10 min), cleanupOldReservations (denne ~0:00), sendReviewRequests (denne ~13:00) + triggery z installSpeedTriggers.');
+}
+
 // ===================== GALÉRIA PRÁC (Google Disk) =====================
 // Holič nahrá fotky/videá do priečinka "web_photos" na Disku účtu, pod ktorým skript beží. Priečinok treba
 // zdieľať ako "Ktokoľvek s odkazom: Prezeranie", súbory v ňom to zdedia (setupDriveFolders() to nastaví samo).

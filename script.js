@@ -1,6 +1,7 @@
 // TODO: dalo by sa to refaktornut ngl xdd
 
-const PROD_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby_CteYfl-EGWSIVmhllNkolqYH_25pL7WXh6SbH6PfQ49muOR33QErWWy8berXUxgkog/exec';
+// Nasadenie pod účtom roman.barbarshop (web aplikácia beží a maily posiela pod tým, kto ju nasadil).
+const PROD_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw65KS-ksdoc0ep2pt3YdrTCZY39zaN0EuXW3rzIHx2gAEyvvy4kyRd8SFHSESTISJZmw/exec';
 
 // Lokálne testovanie proti testovacej kópii tabuľky: http://localhost:8124/?api=<URL testovacieho nasadenia>
 // (adresa sa zapamätá, ?api=prod vráti ostrú). Funguje LEN na localhoste, na ostrom webe sa dá zmeniť jedine tu v kóde,
