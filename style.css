@@ -1171,3 +1171,209 @@ footer a:hover {
         gap: 14px;
     }
 }
+
+/* --- NEPOTVRDENÁ REZERVÁCIA (termín držaný, kým zákazník nepotvrdí mail) --- */
+.cell.booked.pending,
+.box.pending {
+    background: repeating-linear-gradient(135deg, var(--red) 0 6px, #5e0d0d 6px 12px);
+}
+
+.pending-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    box-sizing: border-box;
+    background: rgba(0, 0, 0, 0.78);
+    animation: wide-fade-in 0.2s ease;
+}
+
+.pending-overlay[hidden],
+.pending-mini[hidden],
+.pending-change[hidden],
+.pending-btn[hidden],
+.pending-progress[hidden] {
+    display: none;
+}
+
+.pending-box {
+    width: 100%;
+    max-width: 440px;
+    max-height: 100%;
+    overflow-y: auto;
+    box-sizing: border-box;
+    padding: 26px 24px;
+    background: var(--brown);
+    border: 1px solid var(--gold);
+    border-radius: 12px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+    text-align: center;
+}
+
+.pending-box h3 {
+    margin: 0 0 8px 0;
+    color: var(--gold);
+    font-size: 1.3rem;
+}
+
+.pending-termin {
+    margin: 0 0 14px 0;
+    font-size: 0.9rem;
+    opacity: 0.75;
+}
+
+.pending-text {
+    margin: 0 0 6px 0;
+    line-height: 1.5;
+}
+
+.pending-email {
+    margin: 0 0 16px 0;
+    padding: 10px 12px;
+    background: var(--dark);
+    border-radius: 6px;
+    color: var(--gold);
+    font-weight: bold;
+    font-size: 1.1rem;
+    overflow-wrap: anywhere;
+}
+
+.pending-email:empty,
+.pending-termin:empty,
+.pending-hint:empty,
+.pending-error:empty,
+.pending-timer:empty {
+    display: none;
+}
+
+.pending-progress {
+    height: 6px;
+    background: #444;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.pending-bar {
+    height: 100%;
+    width: 100%;
+    background: var(--gold);
+    border-radius: 3px;
+}
+
+.pending-timer {
+    margin: 8px 0 0 0;
+    font-size: 0.9rem;
+    opacity: 0.85;
+}
+
+.pending-hint {
+    margin: 12px 0 0 0;
+    font-size: 0.8rem;
+    opacity: 0.65;
+    line-height: 1.4;
+}
+
+.pending-error {
+    margin: 12px 0 0 0;
+    color: #ff8a80;
+    font-size: 0.9rem;
+}
+
+.pending-change {
+    margin-top: 16px;
+    text-align: left;
+}
+
+.pending-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 18px;
+}
+
+.pending-btn {
+    width: 100%;
+    min-height: 46px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-weight: bold;
+    font-size: 0.95rem;
+    cursor: pointer;
+    border: 1px solid var(--gold);
+    transition: background 0.15s, color 0.15s, opacity 0.15s;
+}
+
+.pending-change .pending-btn {
+    margin-top: 8px;
+}
+
+.pending-btn.primary {
+    background: var(--gold);
+    color: var(--dark);
+}
+
+.pending-btn.primary:hover {
+    background: #d9b016;
+}
+
+.pending-btn.ghost {
+    background: transparent;
+    color: var(--gold);
+}
+
+.pending-btn.ghost:hover {
+    background: rgba(240, 196, 25, 0.12);
+}
+
+.pending-btn.danger {
+    background: transparent;
+    color: #ff8a80;
+    border-color: #ff8a80;
+}
+
+.pending-btn.danger:hover,
+.pending-btn.danger.armed {
+    background: #d32f2f;
+    border-color: #d32f2f;
+    color: #fff;
+}
+
+.pending-btn:disabled {
+    opacity: 0.5;
+    cursor: wait;
+}
+
+/* zmenšený panel, keď zákazník čaká na mail a chce si zatiaľ prezerať stránku */
+.pending-mini {
+    position: fixed;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    z-index: 8999;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: max-content;
+    max-width: calc(100% - 32px);
+    box-sizing: border-box;
+    padding: 10px 12px 10px 16px;
+    background: var(--brown);
+    border: 1px solid var(--gold);
+    border-radius: 8px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+    font-size: 0.85rem;
+}
+
+.pending-mini button {
+    flex: 0 0 auto;
+    padding: 8px 12px;
+    border: none;
+    border-radius: 4px;
+    background: var(--gold);
+    color: var(--dark);
+    font-weight: bold;
+    cursor: pointer;
+}

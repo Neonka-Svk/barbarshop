@@ -180,6 +180,121 @@ function skontrolujKvotu() {
   SpreadsheetApp.getActiveSpreadsheet().toast("Na dnes ti zostáva " + zostavajucaKvota + " e-mailov.", "Dostupná kvóta", 10);
 }
 
+// --- ŠETRENIE DENNOU KVÓTOU MAILOV ---
+// Keď ostáva menej ako KVOTA_REZERVA mailov, posielajú sa už len maily, bez ktorých to nejde (potvrdenie termínu,
+// zrušenie zákazníkovi, upozornenie na konflikt v rozvrhu). Maily holičovi (nová rezervácia, zrušenie, nová
+// recenzia) sa odložia do hárku "Odložené pre holiča" a o SUHRN_HODINA mu príde jeden súhrnný mail.
+// Prosby o recenziu počkajú na ďalší deň (sendReviewRequests). Keď je kvóty dosť, všetko chodí ako doteraz.
+const KVOTA_REZERVA = 20;
+const SUHRN_HODINA = 20;
+const SHEET_SUHRN = 'Odložené pre holiča';
+const SUHRN_HLAVICKA = ['Čas', 'Typ', 'Text', 'Odkazy (JSON)'];
+
+function mailQuotaLow_() {
+  try {
+    return MailApp.getRemainingDailyQuota() < KVOTA_REZERVA;
+  } catch (err) {
+    return false; // keď sa kvóta nedá zistiť, správame sa ako doteraz
+  }
+}
+
+// Mail holičovi, ktorý môže počkať. polozka = {typ, text, odkazy: [{t, u}]} pre večerný súhrn. Nikdy nehádže chybu.
+function sendBarberMailOrDefer_(mail, polozka) {
+  if (!mailQuotaLow_()) {
+    try {
+      MailApp.sendEmail(Object.assign({ name: MAIL_NAZOV, to: MOJ_EMAIL }, mail));
+      return 'odoslane';
+    } catch (err) {
+      console.error('Mail holičovi neodišiel, ide do večerného súhrnu:', err);
+    }
+  }
+  try {
+    getDigestSheet_().appendRow([
+      Utilities.formatDate(new Date(), 'Europe/Bratislava', 'd.M.yyyy HH:mm'),
+      polozka.typ,
+      safeCell(polozka.text),
+      JSON.stringify(polozka.odkazy || [])
+    ]);
+  } catch (err) {
+    console.error('Položku do súhrnu sa nepodarilo uložiť:', err);
+  }
+  return 'odlozene';
+}
+
+function getDigestSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_SUHRN);
+  if (!sheet) {
+    const povodny = ss.getActiveSheet();
+    sheet = ss.insertSheet(SHEET_SUHRN);
+    sheet.getRange(1, 1, 1, SUHRN_HLAVICKA.length).setValues([SUHRN_HLAVICKA]).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+    try { ss.setActiveSheet(povodny); } catch (err) {}
+  }
+  return sheet;
+}
+
+// Denný trigger o SUHRN_HODINA (installSpeedTriggers). Ak nič odložené nie je, nepošle nič.
+function sendBarberDigest() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_SUHRN);
+  if (!sheet || sheet.getLastRow() < 2) return;
+  let kvota = 1;
+  try { kvota = MailApp.getRemainingDailyQuota(); } catch (err) {}
+  if (kvota < 1) {
+    console.log('Súhrn pre holiča počká na zajtra, kvóta je vyčerpaná.');
+    return;
+  }
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return;
+  try {
+    const n = sheet.getLastRow() - 1;
+    const rows = sheet.getRange(2, 1, n, SUHRN_HLAVICKA.length).getValues();
+    MailApp.sendEmail({ name: MAIL_NAZOV, to: MOJ_EMAIL,
+      subject: 'Súhrn dňa - Barbar Shop (' + rows.length + ')',
+      htmlBody: generateDigestEmailHtml_(rows, kvota)
+    });
+    sheet.deleteRows(2, n); // nové položky pribudnuté medzitým sú až za týmito riadkami a ostanú na zajtra
+  } catch (err) {
+    console.error('Súhrn pre holiča sa nepodarilo odoslať (položky ostávajú):', err);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function generateDigestEmailHtml_(rows, kvota) {
+  const skupiny = {};
+  rows.forEach(function(r) {
+    const typ = String(r[1] || 'Ostatné');
+    (skupiny[typ] = skupiny[typ] || []).push(r);
+  });
+  let telo = '';
+  Object.keys(skupiny).forEach(function(typ) {
+    telo += '<h2 style="color:#1a1a1a;font-size:18px;margin:26px 0 10px 0;border-bottom:2px solid #f0c419;padding-bottom:6px;">' + escapeHtml(typ) + ' (' + skupiny[typ].length + ')</h2>';
+    skupiny[typ].forEach(function(r) {
+      let odkazy = [];
+      try { odkazy = JSON.parse(r[3] || '[]'); } catch (err) {}
+      const linky = odkazy.filter(function(o) { return o && /^https:\/\//.test(o.u); }).map(function(o) {
+        return '<a href="' + escapeHtml(o.u) + '" target="_blank" style="color:#d32f2f;font-weight:bold;text-decoration:none;margin-right:14px;">' + escapeHtml(o.t) + '</a>';
+      }).join('');
+      telo += '<div style="padding:10px 0;border-bottom:1px solid #eeeeee;">' +
+        '<div style="font-size:12px;color:#999999;">' + escapeHtml(String(r[0])) + '</div>' +
+        '<div style="font-size:15px;color:#1a1a1a;margin:2px 0 4px 0;">' + escapeHtml(String(r[2]).replace(/^'/, '')) + '</div>' +
+        (linky ? '<div style="font-size:14px;">' + linky + '</div>' : '') + '</div>';
+    });
+  });
+  return '<!DOCTYPE html><html lang="sk"><head><meta charset="UTF-8"></head><body style="margin:0;padding:0;background-color:#f4f4f5;font-family:Arial,sans-serif;">' +
+    '<table border="0" cellpadding="0" cellspacing="0" width="100%" style="padding:20px 0;"><tr><td align="center">' +
+    '<table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color:#ffffff;border-radius:12px;overflow:hidden;border-collapse:separate;max-width:100%;">' +
+    '<tr><td align="center" style="background-color:#1a1a1a;padding:24px;border-bottom:4px solid #f0c419;"><img src="https://raw.githubusercontent.com/Neonka-Svk/barbarshop/refs/heads/main/barbar_logo_small.png" alt="Barbar Shop" width="130" style="display:block;max-width:130px;"></td></tr>' +
+    '<tr><td style="padding:30px 36px;color:#333333;line-height:1.5;font-size:15px;">' +
+    '<h1 style="color:#1a1a1a;font-size:22px;margin:0 0 10px 0;text-align:center;">Súhrn dňa</h1>' +
+    '<p style="margin:0;padding:12px 14px;background-color:#fff8e1;border-left:4px solid #f0c419;border-radius:6px;font-size:14px;">Dnes ostávalo málo mailov (denná kvóta Gmailu), preto ti tieto upozornenia chodia naraz. Zákazníkom maily odchádzali normálne. Zostáva ešte <strong>' + kvota + '</strong> mailov.</p>' +
+    telo +
+    '</td></tr>' +
+    '<tr><td align="center" style="background-color:#f9f9f9;padding:20px;border-top:1px solid #eaeaea;font-size:12px;color:#999999;">Tento e-mail bol vygenerovaný automaticky systémom Barbar Shop. &copy; 2026 Barbar Shop. Sila a česť.</td></tr>' +
+    '</table></td></tr></table></body></html>';
+}
+
 function updateWebAppUrl() {
   // Volá sa na začiatku doPost/doGet MIMO ich try/catch - keby tu niečo hodilo chybu (napr. dočasný
   // výpadok PropertiesService), celý request by spadol a namiesto JSON-u by prišla HTML chybová stránka.
@@ -189,7 +304,9 @@ function updateWebAppUrl() {
     const url = ScriptApp.getService().getUrl();
     // Uložíme to len ak adresa vyzerá ako ostré nasadenie (obsahuje /exec)
     if (url && url.indexOf('/exec') !== -1) {
-      PropertiesService.getScriptProperties().setProperty('WEB_APP_URL', url);
+      // Zapisuje sa len pri zmene: čítanie je rýchle, zápis sa pri každej návšteve stránky platiť nemusí.
+      const props = PropertiesService.getScriptProperties();
+      if (props.getProperty('WEB_APP_URL') !== url) props.setProperty('WEB_APP_URL', url);
     }
   } catch (err) {
     console.error('updateWebAppUrl zlyhalo (ignorujeme, nie je to kritické):', err);
@@ -403,6 +520,11 @@ function doPost(e) {
   try {
     const data = JSON.parse(e.postData.contents);
 
+    // Akcie nad čakajúcou rezerváciou z panela po odoslaní objednávky (odoslať mail, zmeniť e-mail, zrušiť, stav).
+    if (data && data.action) {
+      return jsonOut(handlePendingAction_(data));
+    }
+
     // Honeypot - skryté pole vo formulári, ktoré vidia iba boti. Ak je vyplnené,
     // len predstierame úspech a nič nerobíme (nezapisujeme, neposielame maily).
     if (data.website) {
@@ -425,6 +547,10 @@ function doPost(e) {
     const [y, m, d] = data.datum.split('-');
     const slovakDate = `${d}.${m}.${y}`;
     const id = Utilities.getUuid();
+    // Tajný kľúč pre prehliadač, ktorý rezerváciu vytvoril (zmena e-mailu, zrušenie, stav). Do tabuľky
+    // ide len jeho odtlačok a nikam sa neposiela mailom.
+    const kluc = Utilities.getUuid() + Utilities.getUuid();
+    const teraz = Date.now();
 
     // Zámok proti súbežnému zápisu - bez neho by mohli dvaja zákazníci naraz
     // zarezervovať presne ten istý termín (obaja by prešli kontrolou obsadenosti skôr,
@@ -434,92 +560,47 @@ function doPost(e) {
       return jsonOut({error: 'Server je momentálne vyťažený, skús to prosím o chvíľu znova.'});
     }
 
-    let zapisany = false;
     try {
-      const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
-      const existujuce = sheet.getDataRange().getDisplayValues();
-
-      for (let i = 1; i < existujuce.length; i++) {
-        const existCas = String(existujuce[i][1]).replace(/^'/, '').trim();
-        if (existujuce[i][0] === slovakDate && existCas === data.cas) {
-          return jsonOut({error: 'Tento termín si medzitým niekto zarezervoval. Vyber si prosím iný.'});
-        }
+      if (isSlotTaken_(slovakDate, data.cas, teraz)) {
+        return jsonOut({error: 'Tento termín si medzitým niekto zarezervoval. Vyber si prosím iný.'});
       }
 
-      sheet.appendRow([slovakDate, "'" + data.cas, new Date(), safeCell(meno), sluzba, safeCell(email), false, id]);
-
-      const lastRow = sheet.getLastRow();
-      sheet.getRange(lastRow, 7).insertCheckboxes();
-
-      if (lastRow > 1) {
-        sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).sort([{column: 1, ascending: true}, {column: 2, ascending: true}]);
-      }
-      zapisany = true;
+      // Rezervácia najprv čaká v hárku "Nepotvrdené" (termín je pre ostatných obsadený). Mail s odkazom
+      // na potvrdenie odíde až po krátkom odpočte na stránke, počas ktorého si zákazník môže opraviť e-mail.
+      getPendingSheet_().appendRow([
+        slovakDate, data.cas, new Date(teraz), safeCell(meno), sluzba, safeCell(email), id,
+        CAKAJUCE_STAV_NEODOSLANE, teraz + POTVRDENIE_ODKLAD_SEKUND * 1000, '', Utilities.getUuid(), hashKey_(kluc), 0
+      ]);
+      PropertiesService.getScriptProperties().setProperty('PENDING_ANY', '1');
+      invalidatePublicCache_(); // kalendár na webe má hneď ukázať držaný termín
     } finally {
       lock.releaseLock();
     }
 
-    if (!zapisany) {
-      return jsonOut({error: 'Rezerváciu sa nepodarilo uložiť.'});
-    }
-
-    // --- E-MAILY (mimo zámku, nech ho nedržíme počas pomalého MailApp volania) ---
-    const baseUrl = ScriptApp.getService().getUrl();
-    const viewUrl = `${baseUrl}?action=viewEmail&id=${id}`;
-    const cancelUrlKlient = `${baseUrl}?action=cancelPage&id=${id}&role=klient`;
-    const cancelUrlHolic = `${baseUrl}?action=cancelPage&id=${id}&role=holic`;
-
-    // --- E-MAIL PRE KLIENTA ---
-    const sablonaKlient = HtmlService.createTemplateFromFile('EmailSablona');
-    sablonaKlient.titulok = "Rezervácia potvrdená";
-    sablonaKlient.meno = meno;
-    sablonaKlient.uvodnyText = "Tvoja rezervácia v Barbar Shope bola úspešne prijatá. Tešíme sa na teba, bojovník!";
-    sablonaKlient.sluzba = sluzba;
-    sablonaKlient.datum = slovakDate;
-    sablonaKlient.cas = data.cas;
-    sablonaKlient.cancelUrl = cancelUrlKlient;
-    sablonaKlient.viewUrl = viewUrl;
-    sablonaKlient.vyzvaText = "V prípade, že si o tento termín nežiadal alebo ho chceš zrušiť, klikni na tlačidlo nižšie:";
-    sablonaKlient.jeHolic = false;
-
-    MailApp.sendEmail({ name: MAIL_NAZOV,
-      to: email,
-      subject: `Barbar Shop - Potvrdenie rezervácie (${slovakDate} o ${data.cas})`,
-      htmlBody: sablonaKlient.evaluate().getContent()
+    return jsonOut({
+      status: 'pending',
+      id: id,
+      key: kluc,
+      email: email,
+      sendInMs: POTVRDENIE_ODKLAD_SEKUND * 1000,
+      holdMinutes: POTVRDENIE_LEHOTA_MINUT,
+      changesLeft: POTVRDENIE_MAX_ZMIEN
     });
-
-    // --- E-MAIL PRE HOLIČA ---
-    const sablonaHolic = HtmlService.createTemplateFromFile('EmailSablona');
-    sablonaHolic.titulok = "Nová rezervácia!";
-    sablonaHolic.meno = "Roman";
-    sablonaHolic.uvodnyText = "Máš nového bojovníka v kresle! Tu sú detaily:";
-    sablonaHolic.sluzba = sluzba;
-    sablonaHolic.datum = slovakDate;
-    sablonaHolic.cas = data.cas;
-    sablonaHolic.emailKlienta = email;
-    sablonaHolic.cancelUrl = cancelUrlHolic;
-    sablonaHolic.viewUrl = viewUrl;
-    sablonaHolic.vyzvaText = "Ak potrebuješ tento termín zrušiť z prevádzkových alebo iných dôvodov, klikni nižšie na tlačidlo:";
-    sablonaHolic.jeHolic = true;
-
-    MailApp.sendEmail({ name: MAIL_NAZOV,
-      to: MOJ_EMAIL,
-      subject: `Nová rezervácia: ${meno} (${slovakDate})`,
-      htmlBody: sablonaHolic.evaluate().getContent()
-    });
-
-    return jsonOut({status: 'success'});
   } catch (err) {
     return jsonOut({error: err.toString()});
   }
 }
 
 function doGet(e) {
-  updateWebAppUrl();
   const action = (e && e.parameter) ? e.parameter.action : null;
   const id = (e && e.parameter) ? e.parameter.id : null;
   const role = (e && e.parameter) ? e.parameter.role : 'klient';
-  
+
+  // Najčastejšia požiadavka (načítanie stránky) ide rýchlou cestou: hotová odpoveď z cache bez otvárania tabuľky.
+  if (!action) return publicDataResponse_();
+
+  updateWebAppUrl();
+
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheetRez = ss.getSheetByName(SHEET_NAME);
   
@@ -539,8 +620,25 @@ function doGet(e) {
         template.cas = data[i][1].replace(/^'/, '');
         template.scriptUrl = ScriptApp.getService().getUrl();
         template.fontFaceCss = fontFaceCss();
+        template.busyCss = BUSY_BUTTON_CSS;
+        template.busyJs = BUSY_BUTTON_JS;
         return template.evaluate().setTitle("Zrušenie rezervácie").addMetaTag('viewport', 'width=device-width, initial-scale=1');
       }
+    }
+    // Ešte nepotvrdená rezervácia (odkaz "Zrušiť termín" je už v maile s potvrdením).
+    const pend = findPending_(id);
+    if (pend.p && isPendingActive_(pend.p.r, Date.now())) {
+      const template = HtmlService.createTemplateFromFile('CancelPage');
+      template.id = id;
+      template.role = 'klient';
+      template.meno = plain_(pend.p.r[3]);
+      template.datum = plain_(pend.p.r[0]);
+      template.cas = plain_(pend.p.r[1], 'HH:mm');
+      template.scriptUrl = ScriptApp.getService().getUrl();
+      template.fontFaceCss = fontFaceCss();
+      template.busyCss = BUSY_BUTTON_CSS;
+      template.busyJs = BUSY_BUTTON_JS;
+      return template.evaluate().setTitle("Zrušenie rezervácie").addMetaTag('viewport', 'width=device-width, initial-scale=1');
     }
     return HtmlService.createHtmlOutput(htmlStart + "Rezervácia nebola nájdená!" + htmlEnd);
   }
@@ -548,43 +646,69 @@ function doGet(e) {
   // --- AKCIA 2: FYZICKÉ ZMAZANIE A ODOSLANIE HTML E-MAILU ---
   if (action === 'executeCancel' && id) {
     const dovodInput = (e && e.parameter.dovod) ? e.parameter.dovod.trim() : "";
-    const data = sheetRez.getDataRange().getDisplayValues();
     let termiZruseny = false;
+    let nepotvrdena = false;
 
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][7] === id) { 
-        let email = data[i][5];
-        let meno = data[i][3];
-        let dStr = data[i][0];
-        let cas = data[i][1].replace(/^'/, '');
-        
-        archiveReservation(data[i], role === 'holic' ? 'Zrušil holič' : 'Zrušil zákazník', dovodInput);
-        sheetRez.deleteRow(i + 1);
-        termiZruseny = true;
-        
-        try {
-          if (role === 'holic') {
-            const subject = "⚠️ Zrušenie rezervácie - Barbar Shop";
-            const bodyHtml = generateCancellationEmailHtml(meno, dStr, cas, dovodInput, true);
-            MailApp.sendEmail({ name: MAIL_NAZOV, to: email, subject: subject, htmlBody: bodyHtml });
-          } else {
-            const subjectHolic = `❌ Zrušený termín: ${meno}`;
-            const bodyHtmlHolic = generateCancellationEmailHtml(meno, dStr, cas, dovodInput, false);
-            MailApp.sendEmail({ name: MAIL_NAZOV, to: MOJ_EMAIL, subject: subjectHolic, htmlBody: bodyHtmlHolic });
+    // Pod zámkom: riadky sa mažú podľa čísla a potvrdenie/nová rezervácia ich medzitým môže preusporiadať.
+    const lockZrus = LockService.getScriptLock();
+    if (!lockZrus.tryLock(15000)) {
+      return HtmlService.createHtmlOutput(htmlStart + "Server je práve vyťažený, skús to o chvíľu znova." + htmlEnd);
+    }
+    try {
+      const data = sheetRez.getDataRange().getDisplayValues();
 
-            const subjectKlient = "Potvrdenie zrušenia termínu";
-            const bodyHtmlKlient = generateCancellationEmailHtml(meno, dStr, cas, dovodInput, true, true);
-            MailApp.sendEmail({ name: MAIL_NAZOV, to: email, subject: subjectKlient, htmlBody: bodyHtmlKlient });
+      for (let i = 1; i < data.length; i++) {
+        if (data[i][7] === id) { 
+          let email = data[i][5];
+          let meno = data[i][3];
+          let dStr = data[i][0];
+          let cas = data[i][1].replace(/^'/, '');
+          
+          archiveReservation(data[i], role === 'holic' ? 'Zrušil holič' : 'Zrušil zákazník', dovodInput);
+          sheetRez.deleteRow(i + 1);
+          termiZruseny = true;
+          invalidatePublicCache_(); // termín sa na webe má hneď uvoľniť
+          
+          try {
+            if (role === 'holic') {
+              const subject = "⚠️ Zrušenie rezervácie - Barbar Shop";
+              const bodyHtml = generateCancellationEmailHtml(meno, dStr, cas, dovodInput, true);
+              MailApp.sendEmail({ name: MAIL_NAZOV, to: email, subject: subject, htmlBody: bodyHtml });
+            } else {
+              // Najprv zákazník (potvrdenie musí odísť), holičovi to pri nízkej kvóte príde vo večernom súhrne.
+              const subjectKlient = "Potvrdenie zrušenia termínu";
+              const bodyHtmlKlient = generateCancellationEmailHtml(meno, dStr, cas, dovodInput, true, true);
+              MailApp.sendEmail({ name: MAIL_NAZOV, to: email, subject: subjectKlient, htmlBody: bodyHtmlKlient });
+
+              sendBarberMailOrDefer_(
+                { subject: `❌ Zrušený termín: ${meno}`, htmlBody: generateCancellationEmailHtml(meno, dStr, cas, dovodInput, false) },
+                { typ: 'Zrušené termíny', text: `${meno}, ${dStr} o ${cas}` + (dovodInput ? ` (dôvod: ${dovodInput})` : '') }
+              );
+            }
+          } catch(err) {
+            console.error('Zlyhalo odoslanie e-mailu pri zrušení (executeCancel):', err);
           }
-        } catch(err) {
-          console.error('Zlyhalo odoslanie e-mailu pri zrušení (executeCancel):', err);
+          break;
         }
-        break;
       }
+
+      // Nepotvrdená rezervácia: len uvoľniť termín, bez mailov (holič o nej ešte nevie).
+      if (!termiZruseny) {
+        const pend = findPending_(id);
+        if (pend.p) {
+          releasePending_(pend.sheet, pend.p, 'Zrušená cez odkaz v maile pred potvrdením' + (dovodInput ? ': ' + dovodInput : ''));
+          invalidatePublicCache_();
+          termiZruseny = true;
+          nepotvrdena = true;
+        }
+      }
+    } finally {
+      lockZrus.releaseLock();
     }
 
     const cardTitle = termiZruseny ? "Termín bol zrušený" : "Termín nenájdený";
-    const cardText = termiZruseny ? "O zrušení termínu bol odoslaný potvrdzujúci e-mail. Môžeš zatvoriť túto stránku." : "Tento termín už neexistuje alebo bol zrušený v minulosti.";
+    const cardText = nepotvrdena ? "Nepotvrdená rezervácia bola zrušená a termín je znova voľný. Môžeš zatvoriť túto stránku."
+      : termiZruseny ? "O zrušení termínu bol odoslaný potvrdzujúci e-mail. Môžeš zatvoriť túto stránku." : "Tento termín už neexistuje alebo bol zrušený v minulosti.";
     const cardIcon = termiZruseny ? "<div class='success-icon'>✓</div>" : "<div class='error-icon'>❌</div>";
     
     const successHtml = `
@@ -645,6 +769,11 @@ function doGet(e) {
         .addMetaTag('viewport', 'width=device-width, initial-scale=1')
         .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
     } else {
+      // Nepotvrdenú rezerváciu tu neukazujeme celú: odkaz na potvrdenie smie mať len ten, kto dostal mail.
+      const pend = findPending_(id);
+      if (pend.p && isPendingActive_(pend.p.r, Date.now())) {
+        return HtmlService.createHtmlOutput(htmlStart + "Rezervácia čaká na potvrdenie. Potvrď ju tlačidlom POTVRDIŤ TERMÍN v maile." + htmlEnd);
+      }
       return HtmlService.createHtmlOutput(htmlStart + "Ľutujeme, ale táto rezervácia už neexistuje!" + htmlEnd);
     }
   }
@@ -666,6 +795,14 @@ function doGet(e) {
     return template.evaluate().setTitle("Recenzia | Barbar Shop").addMetaTag('viewport', 'width=device-width, initial-scale=1');
   }
 
+  // --- AKCIA 3e: POTVRDENIE TERMÍNU ZÁKAZNÍKOM (odkaz z mailu, 2 kroky) ---
+  if (action === 'confirmPage') {
+    return showConfirmPage_(id, e.parameter.c);
+  }
+  if (action === 'doConfirm') {
+    return doConfirm_(id, e.parameter.c);
+  }
+
   // --- AKCIA 3d: SCHVÁLENIE RECENZIE HOLIČOM (odkaz z mailu, 2 kroky) ---
   if (action === 'approveReview') {
     return showApproveReviewPage_(id, e.parameter.t);
@@ -685,7 +822,88 @@ function doGet(e) {
     return jsonOut(getPublicReviews_());
   }
 
-  // --- AKCIA 4: JSON DÁTA PRE KALENDÁR ---
+  // --- AKCIA 4: JSON DÁTA PRE KALENDÁR (aj pre neznáme akcie) ---
+  return publicDataResponse_();
+}
+
+// ===================== DÁTA PRE WEB (kalendár, recenzie, galéria) + CACHE =====================
+// Odpoveď pre stránku sa skladá z 4 hárkov a galérie z Disku, čo je pomalé. Hotový JSON sa preto drží v cache
+// (PUBLIC_CACHE_SEKUND) a maže sa vždy, keď sa niečo zmení: nová/zrušená rezervácia, schválená/zmazaná recenzia,
+// ručná úprava tabuľky (handleEdit, onChange). Ďalšia poistka je časový trigger (installSpeedTriggers), ktorý
+// cache každých 10 minút obnoví, takže návštevník väčšinou čaká na hotovú odpoveď. Rezerváciu to neohrozuje:
+// doPost si obsadenosť vždy overuje priamo v tabuľke.
+const PUBLIC_CACHE_KLUC = 'public_data_v1';
+const PUBLIC_CACHE_VERZIA_KLUC = 'public_data_ver';
+const PUBLIC_CACHE_SEKUND = 900;
+
+// Zmaže hotovú odpoveď a zvýši "verziu", aby sa nezapísala odpoveď, ktorá sa práve zostavovala zo starých dát.
+// Nikdy nehádže chybu: volá sa z miest, ktoré už dáta úspešne zmenili.
+function invalidatePublicCache_() {
+  try {
+    const cache = CacheService.getScriptCache();
+    cache.put(PUBLIC_CACHE_VERZIA_KLUC, Utilities.getUuid(), 21600);
+    cache.remove(PUBLIC_CACHE_KLUC);
+  } catch (err) {
+    console.error('Zmazanie cache zlyhalo (zmena sa na webe prejaví najneskôr po vypršaní cache):', err);
+  }
+}
+
+// Vráti { json, zdroj }. preskocitCache = zostaviť odznova (trigger); vynutitGaleriu = znovu prečítať aj Disk.
+function getPublicData_(preskocitCache, vynutitGaleriu) {
+  const cache = CacheService.getScriptCache();
+  if (!preskocitCache) {
+    const hit = cache.get(PUBLIC_CACHE_KLUC);
+    if (hit) return { json: hit, zdroj: 'cache' };
+  }
+  const verzia = cache.get(PUBLIC_CACHE_VERZIA_KLUC);
+  updateWebAppUrl();
+  const built = buildPublicData_(vynutitGaleriu);
+  const json = JSON.stringify(built.data);
+  // Zapíše sa len ak sa medzitým nič nezmenilo a ak sa všetko načítalo (výpadok galérie sa nemá držať v cache).
+  if (built.uplne && cache.get(PUBLIC_CACHE_VERZIA_KLUC) === verzia) {
+    try { cache.put(PUBLIC_CACHE_KLUC, json, PUBLIC_CACHE_SEKUND); } catch (err) { /* nad 100 kB sa cache preskočí */ }
+  }
+  return { json: json, zdroj: 'tabuľka' };
+}
+
+function publicDataResponse_() {
+  const t0 = Date.now();
+  const r = getPublicData_(false, false);
+  console.log('Dáta pre web: ' + r.zdroj + ', ' + (Date.now() - t0) + ' ms, ' + r.json.length + ' znakov');
+  return ContentService.createTextOutput(r.json).setMimeType(ContentService.MimeType.JSON);
+}
+
+// Časový trigger (každých 10 min): znovu prečíta tabuľky aj Disk, aby cache bola stále čerstvá.
+function refreshPublicCache() {
+  const t0 = Date.now();
+  const r = getPublicData_(true, true);
+  console.log('Cache obnovená za ' + (Date.now() - t0) + ' ms (' + r.json.length + ' znakov)');
+}
+
+// Trigger "pri zmene tabuľky" (vloženie/zmazanie riadku rukou, čo handleEdit nezachytí): obnoví len tabuľkovú časť.
+function onSheetChange() {
+  getPublicData_(true, false);
+}
+
+// Spusti RAZ ručne z editora (po nasadení novej verzie; opakované spustenie nič nezdvojí): založí triggery
+// pre cache aj pre nepotvrdené rezervácie a hneď naplní cache.
+function installSpeedTriggers() {
+  const moje = ['refreshPublicCache', 'onSheetChange', 'processPendingReservations', 'sendBarberDigest'];
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (moje.indexOf(t.getHandlerFunction()) !== -1) ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('refreshPublicCache').timeBased().everyMinutes(10).create();
+  ScriptApp.newTrigger('onSheetChange').forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet()).onChange().create();
+  ScriptApp.newTrigger('processPendingReservations').timeBased().everyMinutes(1).create();
+  ScriptApp.newTrigger('sendBarberDigest').timeBased().everyDays(1).atHour(SUHRN_HODINA).inTimezone('Europe/Bratislava').create();
+  refreshPublicCache();
+  console.log('Triggery založené: refreshPublicCache (každých 10 minút), onSheetChange (pri zmene tabuľky), processPendingReservations (každú minútu), sendBarberDigest (denne okolo ' + SUHRN_HODINA + ':00).');
+}
+
+// Zostaví dáta pre web. uplne = false, ak sa niečo (recenzie, galéria) nepodarilo načítať; takú odpoveď necachujeme.
+function buildPublicData_(vynutitGaleriu) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheetRez = ss.getSheetByName(SHEET_NAME);
   const sheetCustom = ss.getSheetByName(SHEET_CUSTOM);
   const sheetDefault = ss.getSheetByName(SHEET_DEFAULT); 
   
@@ -697,10 +915,21 @@ function doGet(e) {
       if (parts.length === 3) {
         bookings.push({ 
           datum: `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`, 
-          cas: resData[i][1].replace(/^'/, '') 
+          cas: resData[i][1].replace(/^'/, '')
         });
       }
     }
+  }
+
+  // Termíny, ktoré čakajú na potvrdenie mailom, sú pre ostatných obsadené (na webe označené ako držané).
+  let uplne = true;
+  try {
+    activePendingBookings_(Date.now()).forEach(function(b) {
+      bookings.push({ datum: b.datum, cas: b.cas, pending: true });
+    });
+  } catch (err) {
+    uplne = false;
+    console.error('Načítanie nepotvrdených rezervácií zlyhalo (kalendár ide ďalej):', err);
   }
 
   let customRanges = [];
@@ -755,23 +984,34 @@ function doGet(e) {
   try {
     reviews = getPublicReviews_();
   } catch (err) {
+    uplne = false;
     console.error('Načítanie recenzií zlyhalo (kalendár ide ďalej):', err);
   }
 
   let gallery = { items: [] };
   try {
-    gallery = getGalleryItems_();
+    gallery = getGalleryItems_(vynutitGaleriu);
   } catch (err) {
+    uplne = false;
     console.error('Načítanie galérie zlyhalo (kalendár ide ďalej):', err);
   }
 
-  return ContentService.createTextOutput(JSON.stringify({ bookings, custom: customRanges, defaultHours, reviews, gallery }))
-    .setMimeType(ContentService.MimeType.JSON);
+  return { data: { bookings, custom: customRanges, defaultHours, reviews, gallery }, uplne: uplne };
 }
 
 // --- LOGIKA PRE ZRUŠENIE A UPOZORNENIA PRIAMO V TABUĽKE ---
+// Obal okolo skutočnej obsluhy: cache pre web sa zmaže AŽ po dokončení (dialógy v tabuľke môžu trvať aj desiatky
+// sekúnd a medzitým by si ju návštevník stihol zostaviť zo starých dát).
 function handleEdit(e) {
-  if (!e || !e.range) return; 
+  try {
+    handleEditInner_(e);
+  } finally {
+    if (e && e.range) invalidatePublicCache_();
+  }
+}
+
+function handleEditInner_(e) {
+  if (!e || !e.range) return;
   const sheet = e.source.getActiveSheet();
   const sheetName = sheet.getName();
 
@@ -920,6 +1160,7 @@ function processCancellations(cancellations, nonce) {
       console.error("Nepodarilo sa zrušiť riadok:", c.row);
     }
   });
+  invalidatePublicCache_();
 }
 
 // ===================== RECENZIE =====================
@@ -1284,11 +1525,11 @@ function submitReview(payload) {
       const approveUrl = baseUrl + '?action=approveReview&id=' + id + '&t=' + reviewToken_(id, 'approve');
       const deleteUrl = baseUrl + '?action=deleteReview&id=' + id + '&t=' + reviewToken_(id, 'delete');
       const sheetUrl = ss.getUrl() + '#gid=' + getReviewSheet_().getSheetId();
-      MailApp.sendEmail({ name: MAIL_NAZOV,
-        to: MOJ_EMAIL,
-        subject: 'Nová recenzia čaká na schválenie (' + stars + '/5)',
-        htmlBody: generateNewReviewEmailHtml_(name, stars, text, approveUrl, deleteUrl, sheetUrl, pocetFotiek)
-      });
+      sendBarberMailOrDefer_(
+        { subject: 'Nová recenzia čaká na schválenie (' + stars + '/5)', htmlBody: generateNewReviewEmailHtml_(name, stars, text, approveUrl, deleteUrl, sheetUrl, pocetFotiek) },
+        { typ: 'Nové recenzie', text: name + ' (' + stars + '/5): ' + (text.length > 140 ? text.slice(0, 140) + '...' : text) + (pocetFotiek ? ' [' + pocetFotiek + ' foto]' : ''),
+          odkazy: [{ t: 'Schváliť', u: approveUrl }, { t: 'Zmazať', u: deleteUrl }] }
+      );
     } catch (err) {
       console.error('Upozornenie na novú recenziu sa neodoslalo:', err);
     }
@@ -1330,9 +1571,50 @@ function findReview_(id) {
   return null;
 }
 
+// Odozva tlačidiel na stránkach s potvrdením (schváliť, zmazať, zrušiť termín): po odoslaní formulára sa na
+// tlačidle ukáže spinner s textom z atribútu data-busy a druhé odoslanie sa ignoruje (server odpovedá niekoľko
+// sekúnd a bez odozvy by sa dalo kliknúť znova). Pri návrate tlačidlom "späť" sa tlačidlo vráti do pôvodného stavu.
+const BUSY_BUTTON_CSS = `
+.btn.busy{opacity:.85;cursor:wait}
+.btn .spin{display:inline-block;width:14px;height:14px;margin-right:9px;vertical-align:-2px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:btnspin .8s linear infinite}
+@keyframes btnspin{to{transform:rotate(360deg)}}`;
+const BUSY_BUTTON_JS = `
+(function () {
+  document.querySelectorAll('form').forEach(function (form) {
+    var btn = form.querySelector('button[type="submit"]');
+    if (!btn) return;
+    var label = btn.textContent;
+    form.addEventListener('submit', function (ev) {
+      if (form.getAttribute('data-sent')) { ev.preventDefault(); return; }
+      form.setAttribute('data-sent', '1');
+      form.querySelectorAll('textarea').forEach(function (t) { t.readOnly = true; });
+      btn.classList.add('busy');
+      btn.setAttribute('aria-busy', 'true');
+      btn.textContent = '';
+      var spin = document.createElement('span');
+      spin.className = 'spin';
+      btn.appendChild(spin);
+      btn.appendChild(document.createTextNode(btn.getAttribute('data-busy') || 'Pracujem...'));
+    });
+    window.addEventListener('pageshow', function (ev) {
+      if (!ev.persisted) return;
+      form.removeAttribute('data-sent');
+      form.querySelectorAll('textarea').forEach(function (t) { t.readOnly = false; });
+      btn.classList.remove('busy');
+      btn.removeAttribute('aria-busy');
+      btn.textContent = label;
+    });
+  });
+})();`;
+
 // Jednoduchá stránka pre holiča (schválenie recenzie). Všetko dynamické sa escapuje.
 function reviewAdminPage_(title, innerHtml) {
-  const html = '<!DOCTYPE html><html lang="sk"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Recenzia | Barbar Shop</title>' +
+  return cardPage_(title, innerHtml, 'Recenzia | Barbar Shop');
+}
+
+// Tmavá karta v štýle webu (stránky recenzií aj potvrdenia termínu). title a tabTitle sa escapujú, innerHtml nie.
+function cardPage_(title, innerHtml, tabTitle) {
+  const html = '<!DOCTYPE html><html lang="sk"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>' + escapeHtml(tabTitle) + '</title>' +
     '<style>' + fontFaceCss() +
     'body{font-family:Roboto,"Segoe UI",Helvetica,Arial,sans-serif;background:#1a1a1a;color:#e0e0e0;margin:0;padding:20px;display:flex;justify-content:center;align-items:center;min-height:100vh;box-sizing:border-box}' +
     '.card{background:#2b1d16;border:1px solid #f0c419;border-radius:12px;padding:32px;max-width:480px;width:100%;box-shadow:0 10px 30px rgba(0,0,0,.5);box-sizing:border-box}' +
@@ -1343,8 +1625,11 @@ function reviewAdminPage_(title, innerHtml) {
     '.btn{display:block;width:100%;box-sizing:border-box;text-align:center;text-decoration:none;background:#2e7d32;color:#fff;border:none;padding:15px;font-size:16px;font-weight:bold;border-radius:6px;cursor:pointer;margin-top:18px}.btn:hover{background:#256528}' +
     '.link{display:block;text-align:center;color:#f0c419;margin-top:16px;font-size:14px}.ok{font-size:60px;color:#4caf50;text-align:center}p{line-height:1.5}' +
     '.photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px;margin:14px 0}.photos img{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:6px;display:block}' +
-    '</style></head><body><div class="card"><h2>' + escapeHtml(title) + '</h2>' + innerHtml + '</div></body></html>';
-  return HtmlService.createHtmlOutput(html).setTitle('Recenzia | Barbar Shop').addMetaTag('viewport', 'width=device-width, initial-scale=1');
+    '.details{background:#1a1a1a;border-left:4px solid #f0c419;border-radius:6px;padding:12px 15px;margin:16px 0;line-height:1.7;overflow-wrap:anywhere}.details b{color:#f0c419}' +
+    '.btn.gold{background:#f0c419;color:#1a1a1a}.btn.gold:hover{background:#d9b016}.center{text-align:center}' +
+    BUSY_BUTTON_CSS +
+    '</style></head><body><div class="card"><h2>' + escapeHtml(title) + '</h2>' + innerHtml + '</div><script>' + BUSY_BUTTON_JS + '</script></body></html>';
+  return HtmlService.createHtmlOutput(html).setTitle(tabTitle).addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
 function starsHtml_(n) {
@@ -1371,7 +1656,7 @@ function showApproveReviewPage_(id, token) {
     '<input type="hidden" name="action" value="doApproveReview"><input type="hidden" name="id" value="' + escapeHtml(id) + '"><input type="hidden" name="t" value="' + escapeHtml(token) + '">' +
     '<label for="odpoved">Tvoja odpoveď pod recenziou (nepovinné)</label>' +
     '<textarea id="odpoved" name="odpoved" maxlength="500" placeholder="Napr. Ďakujeme, tešíme sa na ďalšiu návštevu!"></textarea>' +
-    '<button type="submit" class="btn">SCHVÁLIŤ A ZVEREJNIŤ</button></form>' +
+    '<button type="submit" class="btn" data-busy="ZVEREJŇUJEM...">SCHVÁLIŤ A ZVEREJNIŤ</button></form>' +
     '<a class="link" href="' + sheetUrl + '" target="_top">Radšej otvoriť tabuľku</a>');
 }
 
@@ -1389,6 +1674,7 @@ function doApproveReview_(id, token, odpoved) {
     const reply = String(odpoved || '').trim().slice(0, 500);
     if (reply) sheet.getRange(r.row, 8).setValue(safeCell(reply));
     syncReviewPhotoSharing_(r.raw, true);
+    invalidatePublicCache_();
   } finally {
     lock.releaseLock();
   }
@@ -1408,7 +1694,7 @@ function showDeleteReviewPage_(id, token) {
     '<p style="text-align:center;color:#ff8a80">Recenzia (aj jej fotky) sa nenávratne odstráni z tabuľky aj z webu.</p>' +
     '<form method="GET" action="' + escapeHtml(ScriptApp.getService().getUrl()) + '" target="_top">' +
     '<input type="hidden" name="action" value="doDeleteReview"><input type="hidden" name="id" value="' + escapeHtml(id) + '"><input type="hidden" name="t" value="' + escapeHtml(token) + '">' +
-    '<button type="submit" class="btn" style="background:#d32f2f">ZMAZAŤ NAVŽDY</button></form>');
+    '<button type="submit" class="btn" style="background:#d32f2f" data-busy="MAŽEM...">ZMAZAŤ NAVŽDY</button></form>');
 }
 
 // Krok 2: skutočné zmazanie riadku.
@@ -1421,6 +1707,7 @@ function doDeleteReview_(id, token) {
     if (!r) return reviewAdminPage_('Recenzia sa nenašla', '<p>Recenzia už neexistuje.</p>');
     deleteReviewPhotos_(r.raw);
     getReviewSheet_().deleteRow(r.row);
+    invalidatePublicCache_();
   } finally {
     lock.releaseLock();
   }
@@ -1530,7 +1817,8 @@ function sendReviewRequests() {
       if (dniOdTerminu < 1 || dniOdTerminu > 5) continue;
 
       // Rezervujeme si časť dennej kvóty pre potvrdenia rezervácií.
-      if (MailApp.getRemainingDailyQuota() < 20) break;
+      // (neodoslané ostanú neoznačené a skúsia sa pri ďalšom dennom behu)
+      if (mailQuotaLow_()) break;
 
       try {
         MailApp.sendEmail({ name: MAIL_NAZOV,
@@ -1565,7 +1853,7 @@ function installReviewTrigger() {
 const GALERIA_PRIECINOK_NAZOV = 'web_photos';
 const GALERIA_PRIECINOK_ID = ''; // voliteľné: ID priečinka z jeho URL, ak by existovalo viac priečinkov s rovnakým názvom
 const GALERIA_MAX = 24;
-const GALERIA_CACHE_SEKUND = 300;
+const GALERIA_CACHE_SEKUND = 900;
 const GALERIA_CACHE_KLUC = 'gallery_v2';
 
 // Berie sa len priečinok, ktorého vlastníkom je tento účet (priečinok s rovnakým názvom, ktorý by nám niekto
@@ -1600,10 +1888,12 @@ function collectGalleryFiles_(folder, out) {
 
 // Vráti {items: [{id, type: 'image'|'video', name}]}, najnovšie prvé. Berú sa súbory priamo v priečinku
 // aj v jeho podpriečinkoch (jedna úroveň), všetky idú do jednej všeobecnej galérie.
-function getGalleryItems_() {
+function getGalleryItems_(vynutit) {
   const cache = CacheService.getScriptCache();
-  const cached = cache.get(GALERIA_CACHE_KLUC);
-  if (cached) return JSON.parse(cached);
+  if (!vynutit) {
+    const cached = cache.get(GALERIA_CACHE_KLUC);
+    if (cached) return JSON.parse(cached);
+  }
 
   let items = [];
   const folder = getGalleryFolder_();
@@ -1624,7 +1914,10 @@ function getGalleryItems_() {
 
 function clearGalleryCache() {
   CacheService.getScriptCache().remove(GALERIA_CACHE_KLUC);
-  try { SpreadsheetApp.getActiveSpreadsheet().toast('Galéria sa na webe obnoví pri najbližšom načítaní stránky.', 'Galéria', 5); } catch (err) {}
+  invalidatePublicCache_();
+  let hotovo = true;
+  try { refreshPublicCache(); } catch (err) { hotovo = false; console.error('Obnova galérie zlyhala:', err); }
+  try { SpreadsheetApp.getActiveSpreadsheet().toast(hotovo ? 'Galéria na webe je obnovená.' : 'Galéria sa na webe obnoví pri najbližšom načítaní stránky.', 'Galéria', 5); } catch (err) {}
 }
 
 function onOpen() {
@@ -1640,6 +1933,377 @@ function onOpen() {
   } catch (err) {
     console.error('Úprava hárku Recenzie zlyhala:', err);
   }
+}
+
+// ===================== POTVRDENIE REZERVÁCIE E-MAILOM =====================
+// Tok: objednávka -> riadok v hárku "Nepotvrdené" (termín je pre ostatných hneď obsadený) -> na stránke beží
+// krátky odpočet, počas ktorého sa dá opraviť e-mail alebo rezervácia zrušiť (ako "Vrátiť späť" v Gmaile) ->
+// odíde mail s tlačidlom POTVRDIŤ TERMÍN -> po potvrdení sa riadok presunie do "Rezervácie" a až vtedy príde
+// mail holičovi. Bez potvrdenia do POTVRDENIE_LEHOTA_MINUT sa termín uvoľní a riadok ide do archívu ako
+// "Nepotvrdená" (vymyslený alebo zle zadaný e-mail tak nič neblokuje).
+// Zavretá stránka počas odpočtu nevadí: trigger processPendingReservations (každú minútu) mail pošle sám.
+// Všetky zmeny v hárku "Nepotvrdené" idú pod zámkom a riadky sa čítajú až v ňom (čísla riadkov sa pri mazaní posúvajú).
+const SHEET_CAKAJUCE = 'Nepotvrdené';
+const CAKAJUCE_HLAVICKA = ['Dátum strihania', 'Objednaný čas', 'Čas objednávky', 'Meno', 'Služba', 'E-mail', 'Identifikátor rezervácie', 'Stav', 'Odoslať mail po (ms)', 'Mail odoslaný (ms)', 'Kód potvrdenia', 'Kľúč prehliadača (odtlačok)', 'Zmeny e-mailu'];
+const CAKAJUCE_STAV_NEODOSLANE = 'ČAKÁ NA ODOSLANIE MAILU';
+const CAKAJUCE_STAV_ODOSLANE = 'ČAKÁ NA POTVRDENIE';
+const POTVRDENIE_ODKLAD_SEKUND = 10;      // odpočet na stránke pred odoslaním mailu (čas na opravu e-mailu)
+const POTVRDENIE_LEHOTA_MINUT = 15;       // koľko minút od odoslania mailu má zákazník na potvrdenie
+const POTVRDENIE_MAX_ZMIEN = 2;           // koľkokrát sa dá zmeniť e-mail
+const POTVRDENIE_NEODOSLANE_MAX_MINUT = 5; // poistka: mail, ktorý z nejakého dôvodu neodišiel, termín dlhšie nedrží
+// Trigger pošle mail za stránku až po tejto rezerve od konca odpočtu: kým zákazník píše opravený e-mail, odpočet
+// na stránke stojí a mail nesmie odísť na pôvodnú adresu. Pri zavretej stránke tak mail príde do ~3 minút.
+const POTVRDENIE_TRIGGER_REZERVA_SEKUND = 120;
+const ARCHIV_STAV_NEPOTVRDENA = 'Nepotvrdená';
+const ARCHIV_NEPOTVRDENE_ANONYMIZOVAT_PO_DNOCH = 30;
+const UUID_REGEX = /^[0-9a-f-]{36}$/i;
+
+function getPendingSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_CAKAJUCE);
+  if (!sheet) {
+    const povodny = ss.getActiveSheet();
+    sheet = ss.insertSheet(SHEET_CAKAJUCE);
+    sheet.getRange(1, 1, 1, CAKAJUCE_HLAVICKA.length).setValues([CAKAJUCE_HLAVICKA]).setFontWeight('bold');
+    sheet.getRange(1, 1, sheet.getMaxRows(), 2).setNumberFormat('@'); // dátum a čas ako text, nech ich Sheets nepreklopí
+    sheet.setFrozenRows(1);
+    try { ss.setActiveSheet(povodny); } catch (err) {}
+  }
+  return sheet;
+}
+
+function hashKey_(key) {
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(key), Utilities.Charset.UTF_8);
+  return Utilities.base64EncodeWebSafe(bytes);
+}
+
+// Hodnota bunky ako text bez apostrofu, ktorý pridáva safeCell (a dátum/čas aj vtedy, keby ho Sheets preklopili na Date).
+function plain_(v, fmt) {
+  if (v instanceof Date) return Utilities.formatDate(v, 'Europe/Bratislava', fmt || 'dd.MM.yyyy');
+  return String(v == null ? '' : v).replace(/^'/, '').trim();
+}
+
+// {sheet, rows: [{row: číslo riadku v hárku, r: hodnoty}]}
+function readPending_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_CAKAJUCE);
+  if (!sheet || sheet.getLastRow() < 2) return { sheet: sheet, rows: [] };
+  const vals = sheet.getRange(2, 1, sheet.getLastRow() - 1, CAKAJUCE_HLAVICKA.length).getValues();
+  return { sheet: sheet, rows: vals.map(function(r, i) { return { row: i + 2, r: r }; }) };
+}
+
+function findPending_(id) {
+  const data = readPending_();
+  const p = data.rows.filter(function(x) { return String(x.r[6]) === String(id); })[0] || null;
+  return { sheet: data.sheet, p: p };
+}
+
+function pendingTimes_(r) {
+  return { sendAfter: Number(r[8]) || 0, sentAt: Number(r[9]) || 0 };
+}
+
+// Drží ešte termín? Po odoslaní mailu POTVRDENIE_LEHOTA_MINUT, pred odoslaním najviac POTVRDENIE_NEODOSLANE_MAX_MINUT.
+function isPendingActive_(r, now) {
+  const t = pendingTimes_(r);
+  if (t.sentAt) return now < t.sentAt + POTVRDENIE_LEHOTA_MINUT * 60000;
+  return now < t.sendAfter + POTVRDENIE_NEODOSLANE_MAX_MINUT * 60000;
+}
+
+// Aktívne čakajúce rezervácie ako [{datum: 'yyyy-mm-dd', cas: 'HH:mm'}] (pre kalendár a kontrolu obsadenosti).
+// Vypršané sa ignorujú hneď, aj keby ich trigger ešte neodpratal.
+function activePendingBookings_(now) {
+  const out = [];
+  readPending_().rows.forEach(function(p) {
+    if (!isPendingActive_(p.r, now)) return;
+    const ymd = slovakDateToYMD_(plain_(p.r[0]));
+    if (ymd) out.push({ datum: ymd, cas: plain_(p.r[1], 'HH:mm') });
+  });
+  return out;
+}
+
+function isConfirmed_(id) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (!sheet) return false;
+  const data = sheet.getDataRange().getDisplayValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][7] === id) return true;
+  }
+  return false;
+}
+
+// Je termín obsadený potvrdenou alebo ešte platnou čakajúcou rezerváciou? Volať pod zámkom.
+function isSlotTaken_(slovakDate, cas, now) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  const existujuce = sheet.getDataRange().getDisplayValues();
+  for (let i = 1; i < existujuce.length; i++) {
+    const existCas = String(existujuce[i][1]).replace(/^'/, '').trim();
+    if (existujuce[i][0] === slovakDate && existCas === cas) return true;
+  }
+  const ymd = slovakDateToYMD_(slovakDate);
+  return activePendingBookings_(now).some(function(b) { return b.datum === ymd && b.cas === cas; });
+}
+
+// Riadok z "Nepotvrdené" do archívu (rovnaký tvar ako rezervácia A-H) a preč z hárku. Volať pod zámkom.
+function releasePending_(sheet, p, dovod) {
+  const r = p.r;
+  archiveReservation([plain_(r[0]), plain_(r[1], 'HH:mm'), r[2], plain_(r[3]), plain_(r[4]), plain_(r[5]), false, r[6]], ARCHIV_STAV_NEPOTVRDENA, dovod);
+  sheet.deleteRow(p.row);
+}
+
+function sendPendingMail_(r) {
+  const id = r[6];
+  const baseUrl = ScriptApp.getService().getUrl();
+  const datum = plain_(r[0]);
+  const cas = plain_(r[1], 'HH:mm');
+  const sablona = HtmlService.createTemplateFromFile('EmailSablona');
+  sablona.titulok = 'Potvrď svoj termín';
+  sablona.meno = plain_(r[3]);
+  sablona.uvodnyText = 'Ešte jeden klik a termín je tvoj. Potvrď ho tlačidlom nižšie do ' + POTVRDENIE_LEHOTA_MINUT + ' minút, inak sa uvoľní pre ďalších bojovníkov.';
+  sablona.sluzba = plain_(r[4]);
+  sablona.datum = datum;
+  sablona.cas = cas;
+  sablona.confirmUrl = baseUrl + '?action=confirmPage&id=' + id + '&c=' + r[10];
+  sablona.cancelUrl = baseUrl + '?action=cancelPage&id=' + id + '&role=klient';
+  sablona.viewUrl = baseUrl + '?action=viewEmail&id=' + id;
+  sablona.vyzvaText = 'Ak si o tento termín nežiadal alebo ho chceš zrušiť, klikni na tlačidlo nižšie:';
+  sablona.jeHolic = false;
+  MailApp.sendEmail({ name: MAIL_NAZOV,
+    to: plain_(r[5]),
+    subject: 'Barbar Shop - Potvrď termín (' + datum + ' o ' + cas + ')',
+    htmlBody: sablona.evaluate().getContent()
+  });
+}
+
+// Pošle mail s odkazom na potvrdenie a zapíše čas odoslania (od neho beží lehota). Vráti chybový text alebo null.
+function deliverPendingMail_(sheet, p) {
+  try {
+    sendPendingMail_(p.r);
+  } catch (err) {
+    console.error('Mail s potvrdením termínu sa nepodarilo odoslať:', err);
+    return 'Mail sa nepodarilo odoslať. Skús to o chvíľu znova.';
+  }
+  const odoslane = Date.now();
+  sheet.getRange(p.row, 8).setValue(CAKAJUCE_STAV_ODOSLANE);
+  sheet.getRange(p.row, 10).setValue(odoslane);
+  p.r[7] = CAKAJUCE_STAV_ODOSLANE;
+  p.r[9] = odoslane;
+  return null;
+}
+
+function sendBarberNewBookingMail_(meno, sluzba, datum, cas, email, id) {
+  const baseUrl = ScriptApp.getService().getUrl();
+  const sablona = HtmlService.createTemplateFromFile('EmailSablona');
+  sablona.titulok = "Nová rezervácia!";
+  sablona.meno = "Roman";
+  sablona.uvodnyText = "Máš nového bojovníka v kresle! Tu sú detaily:";
+  sablona.sluzba = sluzba;
+  sablona.datum = datum;
+  sablona.cas = cas;
+  sablona.emailKlienta = email;
+  sablona.cancelUrl = `${baseUrl}?action=cancelPage&id=${id}&role=holic`;
+  sablona.viewUrl = `${baseUrl}?action=viewEmail&id=${id}`;
+  sablona.vyzvaText = "Ak potrebuješ tento termín zrušiť z prevádzkových alebo iných dôvodov, klikni nižšie na tlačidlo:";
+  sablona.jeHolic = true;
+  sendBarberMailOrDefer_(
+    { subject: `Nová rezervácia: ${meno} (${datum})`, htmlBody: sablona.evaluate().getContent() },
+    { typ: 'Nové rezervácie', text: `${meno}, ${datum} o ${cas}, ${sluzba} (${email})`, odkazy: [{ t: 'Zrušiť', u: sablona.cancelUrl }] }
+  );
+}
+
+// Stav pre stránku. Časy sú relatívne (ms odteraz), aby nezáležalo na tom, ako presne idú hodiny u zákazníka.
+function pendingState_(p, now) {
+  const t = pendingTimes_(p.r);
+  return {
+    state: t.sentAt ? 'sent' : 'waiting',
+    email: plain_(p.r[5]),
+    sendInMs: t.sentAt ? 0 : Math.max(0, t.sendAfter - now),
+    expiresInMs: t.sentAt ? Math.max(0, t.sentAt + POTVRDENIE_LEHOTA_MINUT * 60000 - now) : null,
+    changesLeft: Math.max(0, POTVRDENIE_MAX_ZMIEN - (Number(p.r[12]) || 0))
+  };
+}
+
+// Akcie z panela na stránke. Overuje sa kľúč, ktorý dostal len prehliadač, ktorý rezerváciu vytvoril.
+// Potvrdiť sa odtiaľto nedá: to ide len odkazom z mailu (inak by sa neoverilo, že schránka existuje).
+function handlePendingAction_(data) {
+  const id = String(data.id || '');
+  const key = String(data.key || '');
+  const action = String(data.action || '');
+  if (!UUID_REGEX.test(id) || key.length < 20 || key.length > 200) return { error: 'Neplatná požiadavka.' };
+  if (['status', 'send', 'changeEmail', 'cancel'].indexOf(action) === -1) return { error: 'Neznáma akcia.' };
+
+  // Stav sa pýta často (stránka sa každých pár sekúnd pozrie, či už zákazník klikol v maile), preto bez zámku.
+  if (action === 'status') {
+    const found = findPending_(id);
+    if (!found.p) return { state: isConfirmed_(id) ? 'confirmed' : 'gone' };
+    if (String(found.p.r[11]) !== hashKey_(key)) return { error: 'Neplatná relácia.' };
+    const now = Date.now();
+    if (!isPendingActive_(found.p.r, now)) return { state: 'expired' };
+    return pendingState_(found.p, now);
+  }
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) return { error: 'Server je momentálne vyťažený, skús to prosím o chvíľu znova.' };
+  let zmena = false;
+  try {
+    const now = Date.now();
+    const found = findPending_(id);
+    if (!found.p) return { state: isConfirmed_(id) ? 'confirmed' : 'gone' };
+    if (String(found.p.r[11]) !== hashKey_(key)) return { error: 'Neplatná relácia.' };
+
+    if (!isPendingActive_(found.p.r, now)) {
+      releasePending_(found.sheet, found.p, 'Nepotvrdená včas');
+      zmena = true;
+      return { state: 'expired' };
+    }
+
+    if (action === 'cancel') {
+      releasePending_(found.sheet, found.p, 'Zrušená zákazníkom pred potvrdením');
+      zmena = true;
+      return { state: 'cancelled' };
+    }
+
+    if (action === 'changeEmail') {
+      const email = String(data.email || '').trim();
+      if (email.length > 200 || !EMAIL_REGEX.test(email)) return { error: 'Zadaj platný e-mail.' };
+      const zmeny = Number(found.p.r[12]) || 0;
+      if (zmeny >= POTVRDENIE_MAX_ZMIEN) return { error: 'E-mail sa už nedá znova zmeniť. Zruš rezerváciu a vytvor novú.' };
+      // Nový kód: odkaz z mailu na pôvodnú (zlú) adresu prestane platiť. Odpočet beží odznova.
+      const novyKod = Utilities.getUuid();
+      found.sheet.getRange(found.p.row, 6).setValue(safeCell(email));
+      found.sheet.getRange(found.p.row, 8, 1, 6).setValues([[CAKAJUCE_STAV_NEODOSLANE, now + POTVRDENIE_ODKLAD_SEKUND * 1000, '', novyKod, found.p.r[11], zmeny + 1]]);
+      found.p.r[5] = email;
+      found.p.r[7] = CAKAJUCE_STAV_NEODOSLANE;
+      found.p.r[8] = now + POTVRDENIE_ODKLAD_SEKUND * 1000;
+      found.p.r[9] = '';
+      found.p.r[10] = novyKod;
+      found.p.r[12] = zmeny + 1;
+      return pendingState_(found.p, now);
+    }
+
+    // action === 'send': odpočet na stránke skončil (alebo zákazník klikol "odoslať hneď")
+    if (!pendingTimes_(found.p.r).sentAt) {
+      const chyba = deliverPendingMail_(found.sheet, found.p);
+      if (chyba) return { error: chyba };
+    }
+    return pendingState_(found.p, Date.now());
+  } finally {
+    lock.releaseLock();
+    if (zmena) invalidatePublicCache_();
+  }
+}
+
+// Trigger každú minútu (installSpeedTriggers): pošle maily, ktoré stránka neposlala (zavretá počas odpočtu),
+// a uvoľní termíny, ktoré nikto nepotvrdil. Keď nič nečaká, skončí hneď po jednom prečítaní vlastnosti.
+function processPendingReservations() {
+  const props = PropertiesService.getScriptProperties();
+  if (!props.getProperty('PENDING_ANY')) return;
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return;
+  let zmena = false;
+  try {
+    const now = Date.now();
+    const data = readPending_();
+    let zostava = 0;
+    for (let i = data.rows.length - 1; i >= 0; i--) { // odspodu, nech mazanie neposúva riadky, ktoré ešte prídu na rad
+      const p = data.rows[i];
+      if (!p.r[6]) continue; // prázdny riadok
+      if (!isPendingActive_(p.r, now)) {
+        releasePending_(data.sheet, p, pendingTimes_(p.r).sentAt ? 'Nepotvrdená do ' + POTVRDENIE_LEHOTA_MINUT + ' minút' : 'Mail s potvrdením neodišiel');
+        zmena = true;
+        continue;
+      }
+      zostava++;
+      const t = pendingTimes_(p.r);
+      if (!t.sentAt && now >= t.sendAfter + POTVRDENIE_TRIGGER_REZERVA_SEKUND * 1000) deliverPendingMail_(data.sheet, p);
+    }
+    if (zostava === 0) props.deleteProperty('PENDING_ANY');
+  } finally {
+    lock.releaseLock();
+  }
+  if (zmena) invalidatePublicCache_();
+}
+
+// --- Potvrdenie odkazom z mailu (2 kroky, aby rezerváciu nepotvrdil skener odkazov v pošte) ---
+function bookingDetailsHtml_(r) {
+  return '<div class="details"><b>Bojovník:</b> ' + escapeHtml(plain_(r[3])) + '<br><b>Služba:</b> ' + escapeHtml(plain_(r[4])) +
+    '<br><b>Termín:</b> ' + escapeHtml(plain_(r[0])) + ' o ' + escapeHtml(plain_(r[1], 'HH:mm')) + '</div>';
+}
+
+function bookingPage_(title, innerHtml) {
+  return cardPage_(title, innerHtml, 'Potvrdenie termínu | Barbar Shop');
+}
+
+function expiredBookingPage_() {
+  return bookingPage_('Čas na potvrdenie vypršal',
+    '<p class="center">Termín sa uvoľnil, lebo nebol potvrdený do ' + POTVRDENIE_LEHOTA_MINUT + ' minút (alebo bola rezervácia zrušená). Ak ho stále chceš, vyber si ho na webe znova.</p>' +
+    '<a class="btn gold" href="' + SITE_URL + '" target="_top">OBJEDNAŤ ZNOVA</a>');
+}
+
+// Spoločná kontrola pre oba kroky. Vráti {stranka: HtmlOutput} (niečo nesedí) alebo {sheet, p}.
+function findConfirmable_(id, code) {
+  id = String(id || '');
+  if (!UUID_REGEX.test(id)) return { stranka: bookingPage_('Neplatný odkaz', '<p class="center">Tento odkaz nie je platný.</p>') };
+  if (isConfirmed_(id)) {
+    return { stranka: bookingPage_('Termín je už potvrdený', '<div class="ok">&#10003;</div><p class="center">Tento termín si už potvrdil. Tešíme sa na teba!</p>') };
+  }
+  const found = findPending_(id);
+  if (!found.p || !isPendingActive_(found.p.r, Date.now())) return { stranka: expiredBookingPage_() };
+  if (String(found.p.r[10]) !== String(code || '')) {
+    return { stranka: bookingPage_('Tento odkaz už neplatí', '<p class="center">E-mail pri tejto rezervácii sa medzitým zmenil. Použi odkaz z najnovšieho mailu.</p>') };
+  }
+  return found;
+}
+
+function showConfirmPage_(id, code) {
+  const f = findConfirmable_(id, code);
+  if (f.stranka) return f.stranka;
+  return bookingPage_('Potvrdiť termín?',
+    bookingDetailsHtml_(f.p.r) +
+    '<form method="GET" action="' + escapeHtml(ScriptApp.getService().getUrl()) + '" target="_top">' +
+    '<input type="hidden" name="action" value="doConfirm"><input type="hidden" name="id" value="' + escapeHtml(id) + '"><input type="hidden" name="c" value="' + escapeHtml(code) + '">' +
+    '<button type="submit" class="btn" data-busy="POTVRDZUJEM...">POTVRDIŤ TERMÍN</button></form>');
+}
+
+function doConfirm_(id, code) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) return bookingPage_('Skús znova', '<p class="center">Server je práve vyťažený, skús to o chvíľu.</p>');
+  let r;
+  try {
+    const f = findConfirmable_(id, code);
+    if (f.stranka) return f.stranka;
+    r = f.p.r;
+    const datum = plain_(r[0]);
+    const cas = plain_(r[1], 'HH:mm');
+    const sheetRez = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+
+    // Poistka: potvrdená rezervácia na ten istý termín by tu byť nemala (čakajúca ho drží), ale keby predsa...
+    const existujuce = sheetRez.getDataRange().getDisplayValues();
+    for (let i = 1; i < existujuce.length; i++) {
+      if (existujuce[i][0] === datum && String(existujuce[i][1]).replace(/^'/, '').trim() === cas) {
+        releasePending_(f.sheet, f.p, 'Termín medzičasom obsadený');
+        invalidatePublicCache_();
+        return bookingPage_('Termín už nie je voľný', '<p class="center">Tento termín medzičasom obsadil niekto iný. Prepáč, vyber si prosím iný.</p><a class="btn gold" href="' + SITE_URL + '" target="_top">VYBRAŤ INÝ TERMÍN</a>');
+      }
+    }
+
+    sheetRez.appendRow([datum, "'" + cas, r[2], safeCell(plain_(r[3])), plain_(r[4]), safeCell(plain_(r[5])), false, id]);
+    const lastRow = sheetRez.getLastRow();
+    sheetRez.getRange(lastRow, 7).insertCheckboxes();
+    if (lastRow > 1) {
+      sheetRez.getRange(2, 1, lastRow - 1, sheetRez.getLastColumn()).sort([{column: 1, ascending: true}, {column: 2, ascending: true}]);
+    }
+    f.sheet.deleteRow(f.p.row);
+    invalidatePublicCache_();
+  } finally {
+    lock.releaseLock();
+  }
+
+  try {
+    sendBarberNewBookingMail_(plain_(r[3]), plain_(r[4]), plain_(r[0]), plain_(r[1], 'HH:mm'), plain_(r[5]), id);
+  } catch (err) {
+    console.error('Mail holičovi o novej rezervácii sa nepodarilo odoslať:', err);
+  }
+  return bookingPage_('Termín je potvrdený', '<div class="ok">&#10003;</div>' + bookingDetailsHtml_(r) +
+    '<p class="center">Sila a česť! Tešíme sa na teba. Ak budeš potrebovať termín zrušiť, použi tlačidlo v maile.</p>');
 }
 
 // --- ARCHÍV REZERVÁCIÍ ---
@@ -1705,11 +2369,17 @@ function anonymizeOldArchive() {
   hranica.setHours(0, 0, 0, 0);
   hranica.setMonth(hranica.getMonth() - ARCHIV_ANONYMIZOVAT_PO_MESIACOCH);
 
+  // Nepotvrdené rezervácie (často s vymysleným alebo cudzím e-mailom) sa anonymizujú už po pár dňoch od archivácie.
+  const hranicaNepotvrdene = new Date();
+  hranicaNepotvrdene.setHours(0, 0, 0, 0);
+  hranicaNepotvrdene.setDate(hranicaNepotvrdene.getDate() - ARCHIV_NEPOTVRDENE_ANONYMIZOVAT_PO_DNOCH);
+
   data.forEach((r, i) => {
     if (r[5] === ARCHIV_ANONYMIZOVANE) return;
-    const p = String(r[0]).replace(/\s/g, '').split('.');
+    const nepotvrdena = r[7] === ARCHIV_STAV_NEPOTVRDENA;
+    const p = String(nepotvrdena ? String(r[9]).split(' ')[0] : r[0]).replace(/\s/g, '').split('.');
     if (p.length !== 3) return;
-    if (new Date(p[2], p[1] - 1, p[0]) < hranica) {
+    if (new Date(p[2], p[1] - 1, p[0]) < (nepotvrdena ? hranicaNepotvrdene : hranica)) {
       sheet.getRange(i + 2, 4).setValue(ARCHIV_ANONYMIZOVANE); // Meno
       sheet.getRange(i + 2, 6).setValue(ARCHIV_ANONYMIZOVANE); // E-mail
     }
@@ -1736,6 +2406,8 @@ function cleanupOldReservations() {
       }
     }
   }
+
+  invalidatePublicCache_();
 
   try {
     anonymizeOldArchive();

@@ -1,6 +1,25 @@
 // TODO: dalo by sa to refaktornut ngl xdd
 
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby_CteYfl-EGWSIVmhllNkolqYH_25pL7WXh6SbH6PfQ49muOR33QErWWy8berXUxgkog/exec';
+const PROD_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby_CteYfl-EGWSIVmhllNkolqYH_25pL7WXh6SbH6PfQ49muOR33QErWWy8berXUxgkog/exec';
+
+// Lokálne testovanie proti testovacej kópii tabuľky: http://localhost:8124/?api=<URL testovacieho nasadenia>
+// (adresa sa zapamätá, ?api=prod vráti ostrú). Funguje LEN na localhoste, na ostrom webe sa dá zmeniť jedine tu v kóde,
+// inak by stačil podstrčený odkaz s ?api= a objednávky by odchádzali na cudzí server.
+const SCRIPT_URL = (() => {
+    if (!['localhost', '127.0.0.1'].includes(location.hostname)) return PROD_SCRIPT_URL;
+    try {
+        const api = new URLSearchParams(location.search).get('api');
+        if (api === 'prod') localStorage.removeItem('barbarTestApi');
+        else if (api && /^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(api)) localStorage.setItem('barbarTestApi', api);
+        const test = localStorage.getItem('barbarTestApi');
+        if (test) {
+            document.title = '[TEST] ' + document.title;
+            console.warn('Web beží proti TESTOVACIEMU skriptu:', test);
+            return test;
+        }
+    } catch (e) { /* bez localStorage ostáva ostrá adresa */ }
+    return PROD_SCRIPT_URL;
+})();
 let currentWeekOffset = 0;
 let globalData = { bookings: [], custom: [], defaultHours: [] };
 
@@ -454,6 +473,8 @@ const isDesktopLayout = () => window.matchMedia('(min-width: 1000px)').matches;
 
 document.addEventListener('DOMContentLoaded', async () => {
     setupLightbox();
+    setupPending();
+    resumePending(); // rozpracovaná rezervácia z tejto karty (napr. po obnovení stránky pri prepnutí do mailu)
     await refreshData();
 
     // Navigácia týždňov
@@ -673,9 +694,15 @@ function renderTimetable() {
 
             if (activeSlot) {
                 const cell = document.createElement('div');
-                const isBooked = globalData.bookings.some(b => b.datum === activeSlot.originalDate && b.cas === activeSlot.originalTime);
-                
+                const booking = globalData.bookings.find(b => b.datum === activeSlot.originalDate && b.cas === activeSlot.originalTime);
+                const isBooked = !!booking;
+
                 cell.className = `cell ${isBooked ? 'booked' : 'open'}`;
+                if (booking && booking.pending) {
+                    // Niekto si termín práve objednal a ešte ho nepotvrdil v maile.
+                    cell.classList.add('pending');
+                    cell.title = 'Čaká na potvrdenie. Ak ho objednávateľ nepotvrdí do 15 minút, termín sa uvoľní.';
+                }
                 cell.setAttribute('data-min', m); 
                 cell.setAttribute('data-orig-date', activeSlot.originalDate); 
                 cell.setAttribute('data-orig-min', casNaMinuty(activeSlot.originalTime)); 
@@ -862,6 +889,17 @@ document.getElementById("booking-form").addEventListener("submit", async functio
 
         if (result && result.error) {
             showToast(result.error, "error");
+        } else if (result && result.status === 'pending') {
+            // Termín je držaný, mail s potvrdením odíde po odpočte v paneli (dovtedy sa dá opraviť e-mail).
+            startPending({ id: result.id, key: result.key, meno, termin: formatTermin(datum, cas, sluzba) }, {
+                state: 'waiting', email: result.email, sendInMs: result.sendInMs, changesLeft: result.changesLeft, holdMinutes: result.holdMinutes
+            });
+
+            document.getElementById("booking-form").reset();
+            document.getElementById("date").value = "";
+            document.getElementById("time").value = "";
+            updateSelectedTerminUI();
+            refreshData();
         } else {
             // Úspešný toast namiesto alertu
             showToast(`Sila a česť, ${meno}! Objednávka bola odoslaná.`, "success");
@@ -938,4 +976,349 @@ function showToast(message, type = 'success') {
         toast.style.animation = 'fadeOutToast 0.5s ease forwards';
         setTimeout(() => toast.remove(), 500); // Fyzické vymazanie po animácii
     }, 4000);
+}
+// --- POTVRDENIE REZERVÁCIE E-MAILOM ---
+// Po objednávke je termín len držaný. Panel ukáže, na akú adresu pôjde mail, a počas krátkeho odpočtu sa dá
+// e-mail opraviť alebo rezervácia zrušiť (ako "Vrátiť späť" v Gmaile). Potom odíde mail s tlačidlom
+// POTVRDIŤ TERMÍN a panel sa každých pár sekúnd pozrie, či už zákazník klikol. Kľúč od servera (ním sa overuje,
+// že zmeny robí ten, kto rezerváciu vytvoril) je v sessionStorage tejto karty, aby panel prežil aj obnovenie stránky.
+const PENDING_STORAGE_KEY = 'barbarPending';
+const PENDING_POLL_MS = 5000;
+const PENDING_FINAL = ['confirmed', 'expired', 'gone', 'cancelled'];
+const pendingEmailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+let pending = null; // { id, key, meno, termin }
+const ps = {
+    state: null, email: '', changesLeft: 0,
+    sendAt: 0, sendTotal: 10000, expiresAt: 0, holdMs: 15 * 60000,
+    busy: false, polling: false, editing: false, pausedMs: 0, lastPoll: 0,
+    minimized: false, sendFailures: 0, cancelArmedUntil: 0,
+};
+let pendingTimer = null;
+let pendingSeq = 0;      // poradové číslo požiadavky
+let pendingMinSeq = 0;   // odpovede starších požiadaviek (napr. kontrola stavu spred zmeny e-mailu) sa zahodia
+
+const pEl = (id) => document.getElementById(id);
+const mmss = (ms) => { const s = Math.ceil(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+
+function formatTermin(datum, cas, sluzba) {
+    const [y, m, d] = datum.split('-');
+    return `${d}.${m}.${y} o ${cas}` + (sluzba ? ` · ${sluzba}` : '');
+}
+
+function savePending() {
+    try {
+        if (pending && !PENDING_FINAL.includes(ps.state)) sessionStorage.setItem(PENDING_STORAGE_KEY, JSON.stringify(pending));
+        else sessionStorage.removeItem(PENDING_STORAGE_KEY);
+    } catch (e) { /* súkromné okno a pod.: panel funguje, len neprežije obnovenie stránky */ }
+}
+
+function loadPending() {
+    try { return JSON.parse(sessionStorage.getItem(PENDING_STORAGE_KEY) || 'null'); } catch (e) { return null; }
+}
+
+// Vráti [poradové číslo, odpoveď]. userAction = odpovede skorších kontrol stavu sa po nej už neuplatnia.
+async function pendingApi(action, extra, userAction) {
+    const seq = ++pendingSeq;
+    if (userAction) pendingMinSeq = seq;
+    const response = await fetch(SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(Object.assign({ action, id: pending.id, key: pending.key }, extra || {}))
+    });
+    return [seq, await response.json()];
+}
+
+function resetPendingState() {
+    Object.assign(ps, { state: null, email: '', changesLeft: 0, busy: false, polling: false, editing: false, minimized: false, sendFailures: 0, cancelArmedUntil: 0, lastPoll: 0 });
+    pEl('pending-error').textContent = '';
+}
+
+function startPending(info, state) {
+    pending = info;
+    resetPendingState();
+    applyPendingState(state);
+    showPendingPanel();
+}
+
+// Prevezme stav zo servera. Časy prichádzajú relatívne (ms odteraz), takže nezáleží na hodinách v zariadení.
+function applyPendingState(s, seq) {
+    if (!s || !pending) return;
+    if (seq && seq < pendingMinSeq) return;
+    if (s.error) { pEl('pending-error').textContent = s.error; renderPending(); return; }
+    if (PENDING_FINAL.includes(ps.state)) return; // výsledok sa už nemení
+
+    if (s.state !== ps.state) pEl('pending-error').textContent = '';
+    if (s.email) ps.email = s.email;
+    if (typeof s.changesLeft === 'number') ps.changesLeft = s.changesLeft;
+    if (s.holdMinutes) ps.holdMs = s.holdMinutes * 60000;
+    if (s.state === 'waiting') {
+        ps.sendTotal = Math.max(1000, s.sendInMs || 0);
+        ps.sendAt = Date.now() + (s.sendInMs || 0);
+    }
+    if (s.state === 'sent') ps.expiresAt = Date.now() + (typeof s.expiresInMs === 'number' ? s.expiresInMs : ps.holdMs);
+
+    const changed = s.state !== ps.state;
+    ps.state = s.state;
+    savePending();
+
+    if (PENDING_FINAL.includes(ps.state)) {
+        ps.editing = false;
+        stopPendingTimer();
+        if (changed) refreshData(); // termín sa v kalendári natrvalo obsadil alebo uvoľnil
+        if (ps.minimized) showPendingPanel(); // výsledok ukážeme, aj keď bol panel zmenšený
+    } else {
+        startPendingTimer();
+    }
+    renderPending();
+}
+
+function renderPending() {
+    if (!pending) return;
+    const st = ps.state;
+    const active = st === 'waiting' || st === 'sent';
+    const set = (id, text) => { pEl(id).textContent = text || ''; };
+    const show = (id, visible) => { pEl(id).hidden = !visible; };
+
+    let title = '', text = '', hint = '';
+    if (st === 'waiting') {
+        title = 'Skontroluj svoj e-mail';
+        text = 'Potvrdenie termínu pošleme na:';
+        hint = 'Preklep? Teraz ho ešte opravíš, mail zatiaľ neodišiel.';
+    } else if (st === 'sent') {
+        title = 'Potvrď termín v maile';
+        text = 'Poslali sme ti mail na:';
+        hint = `Klikni v ňom na POTVRDIŤ TERMÍN. Bez potvrdenia sa termín o ${Math.round(ps.holdMs / 60000)} minút uvoľní. Nevidíš ho? Pozri aj priečinok Spam alebo Promo akcie.`;
+    } else if (st === 'confirmed') {
+        title = 'Termín je potvrdený ✓';
+        text = `Sila a česť, ${pending.meno}! Tešíme sa na teba.`;
+        hint = 'Ak budeš potrebovať termín zrušiť, použi tlačidlo v maile.';
+    } else if (st === 'cancelled') {
+        title = 'Rezervácia je zrušená';
+        text = 'Termín je znova voľný.';
+    } else {
+        title = 'Čas na potvrdenie vypršal';
+        text = 'Termín sa uvoľnil, lebo nebol potvrdený včas. Ak ho stále chceš, vyber si ho znova.';
+    }
+
+    set('pending-title', title);
+    set('pending-termin', pending.termin);
+    set('pending-text', ps.editing ? 'Napíš správnu adresu, mail pošleme tam:' : text);
+    set('pending-email', active && !ps.editing ? ps.email : '');
+    set('pending-hint', ps.editing ? '' : hint);
+
+    show('pending-progress', active && !ps.editing);
+    show('pending-change', ps.editing);
+    show('pending-actions', !ps.editing);
+    show('pending-send-now', st === 'waiting');
+    show('pending-change-btn', active && ps.changesLeft > 0);
+    show('pending-cancel-btn', active);
+    show('pending-close-btn', st !== 'waiting');
+    pEl('pending-close-btn').textContent = st === 'sent' ? 'ZAVRIEŤ, POTVRDÍM V MAILI' : 'ZAVRIEŤ';
+
+    const armed = Date.now() < ps.cancelArmedUntil;
+    pEl('pending-cancel-btn').textContent = armed ? 'NAOZAJ ZRUŠIŤ?' : 'ZRUŠIŤ REZERVÁCIU';
+    pEl('pending-cancel-btn').classList.toggle('armed', armed);
+    ['pending-send-now', 'pending-change-btn', 'pending-cancel-btn', 'pending-change-save', 'pending-change-back']
+        .forEach(id => { pEl(id).disabled = ps.busy; });
+
+    updatePendingClock();
+}
+
+function updatePendingClock() {
+    const now = Date.now();
+    let timer = '';
+    let ratio = 0;
+    if (ps.state === 'waiting') {
+        const left = Math.max(0, ps.sendAt - now);
+        if (ps.editing) timer = 'Odpočet stojí, kým upravuješ e-mail.';
+        else if (ps.sendFailures >= 3 && !ps.busy) timer = 'Mail sa zatiaľ nepodarilo odoslať, skúsime to ešte automaticky.';
+        else if (ps.busy || left === 0) timer = 'Posielam mail...';
+        else timer = `Mail odošleme o ${Math.ceil(left / 1000)} s`;
+        ratio = ps.editing ? 0 : left / ps.sendTotal;
+    } else if (ps.state === 'sent') {
+        const left = Math.max(0, ps.expiresAt - now);
+        timer = `Na potvrdenie zostáva ${mmss(left)}`;
+        ratio = left / ps.holdMs;
+        pEl('pending-mini-text').textContent = `Termín čaká na potvrdenie v maile · ${mmss(left)}`;
+    }
+    pEl('pending-timer').textContent = timer;
+    pEl('pending-bar').style.width = `${Math.max(0, Math.min(1, ratio)) * 100}%`;
+}
+
+function startPendingTimer() {
+    if (!pendingTimer) pendingTimer = setInterval(pendingTick, 250);
+}
+
+function stopPendingTimer() {
+    clearInterval(pendingTimer);
+    pendingTimer = null;
+}
+
+function pendingTick() {
+    if (!pending || PENDING_FINAL.includes(ps.state)) { stopPendingTimer(); return; }
+    const now = Date.now();
+    if (ps.cancelArmedUntil && now >= ps.cancelArmedUntil) { ps.cancelArmedUntil = 0; renderPending(); }
+
+    if (!ps.busy && !ps.editing && ps.state === 'waiting' && now >= ps.sendAt && ps.sendFailures < 3) {
+        sendPendingNow();
+    } else if (!ps.busy && !ps.polling && document.visibilityState === 'visible' && now - ps.lastPoll >= PENDING_POLL_MS &&
+               (ps.state === 'sent' || (ps.state === 'waiting' && ps.sendFailures >= 3))) {
+        // čakáme, či zákazník klikol v maile (alebo či mail za nás poslal server, ak sa nedalo spojiť)
+        pollPending();
+    }
+    updatePendingClock();
+}
+
+async function sendPendingNow() {
+    ps.busy = true;
+    renderPending();
+    try {
+        const [seq, s] = await pendingApi('send', null, true);
+        ps.busy = false;
+        if (s.error) { ps.sendFailures++; ps.sendAt = Date.now() + 3000; }
+        applyPendingState(s, seq);
+    } catch (e) {
+        ps.busy = false;
+        ps.sendFailures++;
+        ps.sendAt = Date.now() + 3000;
+        pEl('pending-error').textContent = ps.sendFailures >= 3
+            ? 'Nepodarilo sa spojiť so serverom. Mail ti odošleme automaticky do pár minút.'
+            : 'Spojenie zlyhalo, skúšam znova...';
+        renderPending();
+    }
+}
+
+async function pollPending() {
+    ps.lastPoll = Date.now();
+    ps.polling = true;
+    try {
+        const [seq, s] = await pendingApi('status');
+        applyPendingState(s, seq);
+    } catch (e) {
+        // bez spojenia: skúsi sa pri ďalšom kole
+    } finally {
+        ps.polling = false;
+    }
+}
+
+async function pendingUserAction(action, extra) {
+    ps.busy = true;
+    pEl('pending-error').textContent = '';
+    renderPending();
+    try {
+        const [seq, s] = await pendingApi(action, extra, true);
+        ps.busy = false;
+        return [seq, s];
+    } catch (e) {
+        ps.busy = false;
+        pEl('pending-error').textContent = 'Spojenie zlyhalo, skús to prosím znova.';
+        renderPending();
+        return [0, null];
+    }
+}
+
+function showPendingPanel() {
+    ps.minimized = false;
+    pEl('pending-mini').hidden = true;
+    pEl('pending-overlay').hidden = false;
+    document.body.style.overflow = 'hidden';
+    renderPending();
+    const first = ['pending-send-now', 'pending-close-btn'].map(pEl).find(b => !b.hidden);
+    if (first) first.focus();
+}
+
+function closePendingPanel() {
+    pEl('pending-overlay').hidden = true;
+    document.body.style.overflow = '';
+    if (ps.state === 'sent') {
+        // zákazník ide do mailu: panel sa len zmenší a ďalej sleduje, či termín potvrdil
+        ps.minimized = true;
+        pEl('pending-mini').hidden = false;
+    } else {
+        pEl('pending-mini').hidden = true;
+        stopPendingTimer();
+        pending = null;
+        savePending();
+    }
+}
+
+function setupPending() {
+    if (!pEl('pending-overlay')) return;
+
+    pEl('pending-send-now').addEventListener('click', () => {
+        if (ps.busy || ps.state !== 'waiting') return;
+        ps.sendFailures = 0;
+        sendPendingNow();
+    });
+
+    pEl('pending-change-btn').addEventListener('click', () => {
+        if (ps.busy) return;
+        ps.editing = true;
+        ps.pausedMs = Math.max(0, ps.sendAt - Date.now());
+        pEl('pending-new-email').value = ps.email;
+        pEl('pending-error').textContent = '';
+        renderPending();
+        pEl('pending-new-email').focus();
+        pEl('pending-new-email').select();
+    });
+
+    pEl('pending-change-back').addEventListener('click', () => {
+        ps.editing = false;
+        if (ps.state === 'waiting') ps.sendAt = Date.now() + Math.max(ps.pausedMs, 3000);
+        pEl('pending-error').textContent = '';
+        renderPending();
+    });
+
+    pEl('pending-change').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (ps.busy) return;
+        const email = pEl('pending-new-email').value.trim();
+        if (!pendingEmailRegex.test(email)) { pEl('pending-error').textContent = 'Tento e-mail nevyzerá správne. Skontroluj ho.'; return; }
+        if (email.toLowerCase() === ps.email.toLowerCase()) { pEl('pending-error').textContent = 'To je ten istý e-mail ako doteraz.'; return; }
+        const [seq, s] = await pendingUserAction('changeEmail', { email });
+        if (!s) return;
+        if (!s.error) ps.editing = false;
+        ps.sendFailures = 0;
+        applyPendingState(s, seq);
+    });
+
+    pEl('pending-cancel-btn').addEventListener('click', async () => {
+        if (ps.busy) return;
+        if (Date.now() >= ps.cancelArmedUntil) {
+            ps.cancelArmedUntil = Date.now() + 4000; // druhé kliknutie do 4 s naozaj zruší
+            renderPending();
+            return;
+        }
+        ps.cancelArmedUntil = 0;
+        const [seq, s] = await pendingUserAction('cancel');
+        if (s) applyPendingState(s, seq);
+    });
+
+    pEl('pending-close-btn').addEventListener('click', closePendingPanel);
+    pEl('pending-mini-open').addEventListener('click', showPendingPanel);
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !pEl('pending-overlay').hidden && ps.state !== 'waiting' && !ps.editing) closePendingPanel();
+    });
+
+    // Po návrate z mailovej aplikácie sa hneď pozrieme, či už je termín potvrdený.
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && pending && ps.state === 'sent') ps.lastPoll = 0;
+    });
+}
+
+async function resumePending() {
+    const saved = loadPending();
+    if (!saved || !saved.id || !saved.key) return;
+    pending = saved;
+    resetPendingState();
+    try {
+        const [seq, s] = await pendingApi('status');
+        if (!s || s.error) { pending = null; savePending(); return; }
+        applyPendingState(s, seq);
+        showPendingPanel();
+    } catch (e) {
+        pending = null; // bez spojenia: uložený stav ostane, skúsi sa pri ďalšom načítaní
+    }
 }

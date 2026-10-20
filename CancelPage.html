@@ -71,6 +71,7 @@
       transition: background-color 0.3s;
     }
     .btn:hover { background-color: #b71c1c; }
+    <?!= busyCss ?>
   </style>
 </head>
 <body>
@@ -89,8 +90,9 @@
       
       <textarea name="dovod" placeholder="Zadaj dôvod zrušenia (nepovinné)..."></textarea>
       
-      <button type="submit" class="btn">ÁNO, ZRUŠIŤ TERMÍN</button>
+      <button type="submit" class="btn" data-busy="RUŠÍM TERMÍN...">ÁNO, ZRUŠIŤ TERMÍN</button>
     </form>
   </div>
+  <script><?!= busyJs ?></script>
 </body>
 </html>

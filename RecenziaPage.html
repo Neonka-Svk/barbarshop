@@ -110,6 +110,8 @@
     }
     .btn:hover { background-color: #b71c1c; }
     .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn .spin { display: inline-block; width: 14px; height: 14px; margin-right: 9px; vertical-align: -2px; border: 2px solid rgba(255, 255, 255, 0.35); border-top-color: #fff; border-radius: 50%; animation: btnspin 0.8s linear infinite; }
+    @keyframes btnspin { to { transform: rotate(360deg); } }
     .error { color: #ff8a80; font-size: 14px; margin-top: 14px; min-height: 18px; text-align: center; }
     .done { text-align: center; }
     .done .icon { font-size: 60px; color: #4caf50; margin-bottom: 10px; }
@@ -190,7 +192,8 @@
     // Každá fotka sa v prehliadači prekóduje do JPEG (zmenšená, bez EXIF/polohy, bez čohokoľvek skrytého
     // v origináli) a až tá sa odošle. Server aj tak všetko znova overuje a prijme len JPEG.
     const MAX_PHOTOS = 5;
-    const MAX_SIDE = 1600;
+    const MAX_WIDTH = 1200;  // šírka sa obmedzí na 1200 px, výška sa dopočíta podľa pomeru strán
+    const MAX_HEIGHT = 4000; // poistka pre extrémne vysoké obrázky (server prijme najviac 4096 px)
     const MAX_BYTES = 1200000;
     const MAX_RAW_BYTES = 30 * 1024 * 1024;
 
@@ -267,7 +270,7 @@
       const srcW = bitmap.width, srcH = bitmap.height;
       if (!srcW || !srcH || srcW < 16 || srcH < 16) throw new Error('Fotka "' + file.name + '" je príliš malá.');
 
-      let scale = Math.min(1, MAX_SIDE / Math.max(srcW, srcH));
+      let scale = Math.min(1, MAX_WIDTH / srcW, MAX_HEIGHT / srcH);
       let quality = 0.85;
       let blob = null;
       for (let attempt = 0; attempt < 6; attempt++) {
@@ -330,7 +333,11 @@
 
       submitBtn.disabled = true;
       photoAdd.disabled = true;
-      submitBtn.textContent = photos.length ? 'NAHRÁVAM...' : 'ODOSÍELAM...';
+      submitBtn.textContent = '';
+      const spin = document.createElement('span');
+      spin.className = 'spin';
+      submitBtn.appendChild(spin);
+      submitBtn.appendChild(document.createTextNode(photos.length ? 'NAHRÁVAM...' : 'ODOSIELAM...'));
 
       const restore = function () {
         submitBtn.disabled = false;

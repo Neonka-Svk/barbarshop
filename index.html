@@ -24,6 +24,9 @@
 
 
     <link rel="icon" type="image/x-icon" href="barbar_logo.webp">
+    <!-- Spojenie s Google serverom sa nadviaže už počas sťahovania stránky, nie až pri načítaní dát -->
+    <link rel="preconnect" href="https://script.google.com" crossorigin>
+    <link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -111,6 +114,7 @@
             <div class="legend">
                 <div class="leg-item"><span class="box green"></span> Dostupné</div>
                 <div class="leg-item"><span class="box red"></span> Obsadené</div>
+                <div class="leg-item"><span class="box pending"></span> Čaká na potvrdenie</div>
                 <div class="leg-item"><span class="box gray"></span> Zatvorené</div>
                 <div class="leg-item"><span class="box gold"></span> Aktuálne zvolený termín</div>
                 <div class="leg-item"><span class="box outOfRange"></span> Po možnosti rezervovať</div>
@@ -133,6 +137,36 @@
         <p>&copy; 2026 Barbar Shop. Sila a česť. | <a href="privacy.html">Ochrana osobných údajov</a></p>
     </footer>
     
+    <!-- Panel po odoslaní objednávky: odpočet pred odoslaním mailu (oprava e-mailu), potom čakanie na potvrdenie -->
+    <div class="pending-overlay" id="pending-overlay" hidden>
+        <div class="pending-box" role="dialog" aria-modal="true" aria-labelledby="pending-title" aria-describedby="pending-text">
+            <h3 id="pending-title"></h3>
+            <p class="pending-termin" id="pending-termin"></p>
+            <p class="pending-text" id="pending-text"></p>
+            <p class="pending-email" id="pending-email"></p>
+            <div class="pending-progress" id="pending-progress"><div class="pending-bar" id="pending-bar"></div></div>
+            <p class="pending-timer" id="pending-timer" aria-live="polite"></p>
+            <p class="pending-hint" id="pending-hint"></p>
+            <form class="pending-change" id="pending-change" hidden novalidate>
+                <label for="pending-new-email">Správny e-mail:</label>
+                <input type="email" id="pending-new-email" autocomplete="email" maxlength="200">
+                <button type="submit" class="pending-btn primary" id="pending-change-save">ULOŽIŤ A POSLAŤ</button>
+                <button type="button" class="pending-btn ghost" id="pending-change-back">SPÄŤ</button>
+            </form>
+            <p class="pending-error" id="pending-error" role="alert"></p>
+            <div class="pending-actions" id="pending-actions">
+                <button type="button" class="pending-btn primary" id="pending-send-now">E-MAIL JE SPRÁVNY, POSLAŤ</button>
+                <button type="button" class="pending-btn ghost" id="pending-change-btn">ZMENIŤ E-MAIL</button>
+                <button type="button" class="pending-btn danger" id="pending-cancel-btn">ZRUŠIŤ REZERVÁCIU</button>
+                <button type="button" class="pending-btn primary" id="pending-close-btn">ZAVRIEŤ</button>
+            </div>
+        </div>
+    </div>
+    <div class="pending-mini" id="pending-mini" hidden>
+        <span id="pending-mini-text"></span>
+        <button type="button" id="pending-mini-open">ZOBRAZIŤ</button>
+    </div>
+
     <div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Galéria">
         <button type="button" class="lightbox-close" id="lightbox-close" aria-label="Zavrieť">&times;</button>
         <button type="button" class="lightbox-nav lightbox-prev" id="lightbox-prev" aria-label="Predchádzajúca">&#8249;</button>
