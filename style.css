@@ -1261,6 +1261,7 @@ footer a:hover {
     width: 100%;
     background: var(--gold);
     border-radius: 3px;
+    transition: width 0.25s linear; /* šírka sa mení každú 1/4 s, prechod medzi krokmi ju vyhladí */
 }
 
 .pending-timer {

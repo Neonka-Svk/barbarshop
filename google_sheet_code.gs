@@ -1947,7 +1947,7 @@ const SHEET_CAKAJUCE = 'Nepotvrdené';
 const CAKAJUCE_HLAVICKA = ['Dátum strihania', 'Objednaný čas', 'Čas objednávky', 'Meno', 'Služba', 'E-mail', 'Identifikátor rezervácie', 'Stav', 'Odoslať mail po (ms)', 'Mail odoslaný (ms)', 'Kód potvrdenia', 'Kľúč prehliadača (odtlačok)', 'Zmeny e-mailu'];
 const CAKAJUCE_STAV_NEODOSLANE = 'ČAKÁ NA ODOSLANIE MAILU';
 const CAKAJUCE_STAV_ODOSLANE = 'ČAKÁ NA POTVRDENIE';
-const POTVRDENIE_ODKLAD_SEKUND = 10;      // odpočet na stránke pred odoslaním mailu (čas na opravu e-mailu)
+const POTVRDENIE_ODKLAD_SEKUND = 15;      // odpočet na stránke pred odoslaním mailu (čas na opravu e-mailu)
 const POTVRDENIE_LEHOTA_MINUT = 15;       // koľko minút od odoslania mailu má zákazník na potvrdenie
 const POTVRDENIE_MAX_ZMIEN = 2;           // koľkokrát sa dá zmeniť e-mail
 const POTVRDENIE_NEODOSLANE_MAX_MINUT = 5; // poistka: mail, ktorý z nejakého dôvodu neodišiel, termín dlhšie nedrží
@@ -2232,44 +2232,80 @@ function bookingPage_(title, innerHtml) {
   return cardPage_(title, innerHtml, 'Potvrdenie termínu | Barbar Shop');
 }
 
-function expiredBookingPage_() {
-  return bookingPage_('Čas na potvrdenie vypršal',
+// Výsledky potvrdenia ako {title, inner}: rovnaký obsah ide do celej stránky aj do odpovede pre google.script.run.
+function confirmResult_(title, inner) {
+  return { title: title, inner: inner };
+}
+
+function expiredConfirmResult_() {
+  return confirmResult_('Čas na potvrdenie vypršal',
     '<p class="center">Termín sa uvoľnil, lebo nebol potvrdený do ' + POTVRDENIE_LEHOTA_MINUT + ' minút (alebo bola rezervácia zrušená). Ak ho stále chceš, vyber si ho na webe znova.</p>' +
     '<a class="btn gold" href="' + SITE_URL + '" target="_top">OBJEDNAŤ ZNOVA</a>');
 }
 
-// Spoločná kontrola pre oba kroky. Vráti {stranka: HtmlOutput} (niečo nesedí) alebo {sheet, p}.
+// Spoločná kontrola pre oba kroky. Vráti {vysledok: {title, inner}} (niečo nesedí) alebo {sheet, p}.
 function findConfirmable_(id, code) {
   id = String(id || '');
-  if (!UUID_REGEX.test(id)) return { stranka: bookingPage_('Neplatný odkaz', '<p class="center">Tento odkaz nie je platný.</p>') };
+  if (!UUID_REGEX.test(id)) return { vysledok: confirmResult_('Neplatný odkaz', '<p class="center">Tento odkaz nie je platný.</p>') };
   if (isConfirmed_(id)) {
-    return { stranka: bookingPage_('Termín je už potvrdený', '<div class="ok">&#10003;</div><p class="center">Tento termín si už potvrdil. Tešíme sa na teba!</p>') };
+    return { vysledok: confirmResult_('Termín je už potvrdený', '<div class="ok">&#10003;</div><p class="center">Tento termín si už potvrdil. Tešíme sa na teba!</p>') };
   }
   const found = findPending_(id);
-  if (!found.p || !isPendingActive_(found.p.r, Date.now())) return { stranka: expiredBookingPage_() };
+  if (!found.p || !isPendingActive_(found.p.r, Date.now())) return { vysledok: expiredConfirmResult_() };
   if (String(found.p.r[10]) !== String(code || '')) {
-    return { stranka: bookingPage_('Tento odkaz už neplatí', '<p class="center">E-mail pri tejto rezervácii sa medzitým zmenil. Použi odkaz z najnovšieho mailu.</p>') };
+    return { vysledok: confirmResult_('Tento odkaz už neplatí', '<p class="center">E-mail pri tejto rezervácii sa medzitým zmenil. Použi odkaz z najnovšieho mailu.</p>') };
   }
   return found;
 }
 
+// Krok 1 (odkaz z mailu). Krok 2 ide cez google.script.run priamo z tejto stránky, nie formulárom: pri prehliadači
+// prihlásenom do viacerých Google účtov Google presmerovanie formulára na adresu skriptu niekedy zle nasmeruje
+// ("Súbor momentálne nie je možné otvoriť"). Kód ide do stránky cez jsonForScript (bezpečne v <script>).
 function showConfirmPage_(id, code) {
   const f = findConfirmable_(id, code);
-  if (f.stranka) return f.stranka;
+  if (f.vysledok) return bookingPage_(f.vysledok.title, f.vysledok.inner);
   return bookingPage_('Potvrdiť termín?',
     bookingDetailsHtml_(f.p.r) +
-    '<form method="GET" action="' + escapeHtml(ScriptApp.getService().getUrl()) + '" target="_top">' +
-    '<input type="hidden" name="action" value="doConfirm"><input type="hidden" name="id" value="' + escapeHtml(id) + '"><input type="hidden" name="c" value="' + escapeHtml(code) + '">' +
-    '<button type="submit" class="btn" data-busy="POTVRDZUJEM...">POTVRDIŤ TERMÍN</button></form>');
+    '<button type="button" class="btn" id="potvrdit">POTVRDIŤ TERMÍN</button>' +
+    '<p class="center" id="chyba" style="color:#ff8a80;min-height:1em"></p>' +
+    '<script>(function () {' +
+    'var ID = ' + jsonForScript(String(id)) + ', KOD = ' + jsonForScript(String(code)) + ';' +
+    'var b = document.getElementById("potvrdit"), chyba = document.getElementById("chyba");' +
+    'b.addEventListener("click", function () {' +
+    '  if (b.disabled) return;' +
+    '  b.disabled = true; b.classList.add("busy"); b.textContent = "";' +
+    '  var s = document.createElement("span"); s.className = "spin"; b.appendChild(s); b.appendChild(document.createTextNode("POTVRDZUJEM..."));' +
+    '  chyba.textContent = "";' +
+    '  google.script.run.withSuccessHandler(function (v) {' +
+    '    var card = document.querySelector(".card"); card.innerHTML = "";' +
+    '    var h = document.createElement("h2"); h.textContent = v.title; card.appendChild(h);' +
+    '    card.insertAdjacentHTML("beforeend", v.inner);' +
+    '  }).withFailureHandler(function () {' +
+    '    b.disabled = false; b.classList.remove("busy"); b.textContent = "POTVRDIŤ TERMÍN";' +
+    '    chyba.textContent = "Spojenie zlyhalo, skús to prosím znova.";' +
+    '  }).confirmBookingFromPage(ID, KOD);' +
+    '});' +
+    '})();</script>');
 }
 
+// Volá stránka z kroku 1 (google.script.run). Bez správneho kódu z mailu nič neurobí.
+function confirmBookingFromPage(id, code) {
+  return confirmBooking_(id, code);
+}
+
+// Starší tvar kroku 2 (formulár / priamy odkaz), keby niekto mal otvorenú stránku spred zmeny.
 function doConfirm_(id, code) {
+  const v = confirmBooking_(id, code);
+  return bookingPage_(v.title, v.inner);
+}
+
+function confirmBooking_(id, code) {
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(15000)) return bookingPage_('Skús znova', '<p class="center">Server je práve vyťažený, skús to o chvíľu.</p>');
+  if (!lock.tryLock(15000)) return confirmResult_('Skús znova', '<p class="center">Server je práve vyťažený, skús to o chvíľu.</p>');
   let r;
   try {
     const f = findConfirmable_(id, code);
-    if (f.stranka) return f.stranka;
+    if (f.vysledok) return f.vysledok;
     r = f.p.r;
     const datum = plain_(r[0]);
     const cas = plain_(r[1], 'HH:mm');
@@ -2281,11 +2317,11 @@ function doConfirm_(id, code) {
       if (existujuce[i][0] === datum && String(existujuce[i][1]).replace(/^'/, '').trim() === cas) {
         releasePending_(f.sheet, f.p, 'Termín medzičasom obsadený');
         invalidatePublicCache_();
-        return bookingPage_('Termín už nie je voľný', '<p class="center">Tento termín medzičasom obsadil niekto iný. Prepáč, vyber si prosím iný.</p><a class="btn gold" href="' + SITE_URL + '" target="_top">VYBRAŤ INÝ TERMÍN</a>');
+        return confirmResult_('Termín už nie je voľný', '<p class="center">Tento termín medzičasom obsadil niekto iný. Prepáč, vyber si prosím iný.</p><a class="btn gold" href="' + SITE_URL + '" target="_top">VYBRAŤ INÝ TERMÍN</a>');
       }
     }
 
-    sheetRez.appendRow([datum, "'" + cas, r[2], safeCell(plain_(r[3])), plain_(r[4]), safeCell(plain_(r[5])), false, id]);
+    sheetRez.appendRow([datum, "'" + cas, r[2], safeCell(plain_(r[3])), plain_(r[4]), safeCell(plain_(r[5])), false, String(id)]);
     const lastRow = sheetRez.getLastRow();
     sheetRez.getRange(lastRow, 7).insertCheckboxes();
     if (lastRow > 1) {
@@ -2298,11 +2334,11 @@ function doConfirm_(id, code) {
   }
 
   try {
-    sendBarberNewBookingMail_(plain_(r[3]), plain_(r[4]), plain_(r[0]), plain_(r[1], 'HH:mm'), plain_(r[5]), id);
+    sendBarberNewBookingMail_(plain_(r[3]), plain_(r[4]), plain_(r[0]), plain_(r[1], 'HH:mm'), plain_(r[5]), String(id));
   } catch (err) {
     console.error('Mail holičovi o novej rezervácii sa nepodarilo odoslať:', err);
   }
-  return bookingPage_('Termín je potvrdený', '<div class="ok">&#10003;</div>' + bookingDetailsHtml_(r) +
+  return confirmResult_('Termín je potvrdený', '<div class="ok">&#10003;</div>' + bookingDetailsHtml_(r) +
     '<p class="center">Sila a česť! Tešíme sa na teba. Ak budeš potrebovať termín zrušiť, použi tlačidlo v maile.</p>');
 }
 
