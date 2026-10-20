@@ -569,8 +569,10 @@ function doPost(e) {
       // na potvrdenie odíde až po krátkom odpočte na stránke, počas ktorého si zákazník môže opraviť e-mail.
       getPendingSheet_().appendRow([
         slovakDate, data.cas, new Date(teraz), safeCell(meno), sluzba, safeCell(email), id,
-        CAKAJUCE_STAV_NEODOSLANE, teraz + POTVRDENIE_ODKLAD_SEKUND * 1000, '', Utilities.getUuid(), hashKey_(kluc), 0
+        CAKAJUCE_STAV_NEODOSLANE, teraz + POTVRDENIE_ODKLAD_SEKUND * 1000, '', Utilities.getUuid(), hashKey_(kluc), 0, false
       ]);
+      const cakajuce = getPendingSheet_();
+      cakajuce.getRange(cakajuce.getLastRow(), CAKAJUCE_STLPEC_POTVRDIT).insertCheckboxes();
       PropertiesService.getScriptProperties().setProperty('PENDING_ANY', '1');
       invalidatePublicCache_(); // kalendár na webe má hneď ukázať držaný termín
     } finally {
@@ -1040,6 +1042,28 @@ function handleEditInner_(e) {
        sheet.deleteRow(row);
     } else {
        e.range.setValue(false); 
+    }
+    return;
+  }
+
+  // 1a. Ručné potvrdenie čakajúcej rezervácie (checkbox v hárku Nepotvrdené), napr. kamarátovi, ktorý nemá prístup k mailu
+  if (sheetName === SHEET_CAKAJUCE && e.range.getColumn() === CAKAJUCE_STLPEC_POTVRDIT && e.range.getRow() > 1 && e.range.getValue() === true) {
+    const ui = SpreadsheetApp.getUi();
+    const r = sheet.getRange(e.range.getRow(), 1, 1, CAKAJUCE_HLAVICKA.length).getValues()[0];
+    const odpoved = ui.alert('Potvrdiť rezerváciu?',
+      'Rezervácia "' + plain_(r[3]) + '" na ' + plain_(r[0]) + ' o ' + plain_(r[1], 'HH:mm') + ' sa potvrdí bez kliknutia v maile a presunie do hárku Rezervácie. Pokračovať?',
+      ui.ButtonSet.YES_NO);
+    if (odpoved !== ui.Button.YES) {
+      e.range.setValue(false);
+      return;
+    }
+    const v = confirmBooking_(String(r[6]), null, true);
+    if (v.title === 'Termín je potvrdený') {
+      SpreadsheetApp.getActiveSpreadsheet().toast('Rezervácia je potvrdená a presunutá do hárku Rezervácie.', 'Hotovo', 6);
+    } else {
+      // checkbox vrátime len ak je na tom mieste stále ten istý riadok (pri uvoľnení sa riadky posunú)
+      try { if (String(sheet.getRange(e.range.getRow(), 7).getValue()) === String(r[6])) e.range.setValue(false); } catch (err) {}
+      ui.alert(v.title, String(v.inner).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(), ui.ButtonSet.OK);
     }
     return;
   }
@@ -1944,7 +1968,8 @@ function onOpen() {
 // Zavretá stránka počas odpočtu nevadí: trigger processPendingReservations (každú minútu) mail pošle sám.
 // Všetky zmeny v hárku "Nepotvrdené" idú pod zámkom a riadky sa čítajú až v ňom (čísla riadkov sa pri mazaní posúvajú).
 const SHEET_CAKAJUCE = 'Nepotvrdené';
-const CAKAJUCE_HLAVICKA = ['Dátum strihania', 'Objednaný čas', 'Čas objednávky', 'Meno', 'Služba', 'E-mail', 'Identifikátor rezervácie', 'Stav', 'Odoslať mail po (ms)', 'Mail odoslaný (ms)', 'Kód potvrdenia', 'Kľúč prehliadača (odtlačok)', 'Zmeny e-mailu'];
+const CAKAJUCE_HLAVICKA = ['Dátum strihania', 'Objednaný čas', 'Čas objednávky', 'Meno', 'Služba', 'E-mail', 'Identifikátor rezervácie', 'Stav', 'Odoslať mail po (ms)', 'Mail odoslaný (ms)', 'Kód potvrdenia', 'Kľúč prehliadača (odtlačok)', 'Zmeny e-mailu', 'Potvrdiť ručne'];
+const CAKAJUCE_STLPEC_POTVRDIT = 14; // checkbox: holič potvrdí rezerváciu sám (napr. kamarátovi bez mailu)
 const CAKAJUCE_STAV_NEODOSLANE = 'ČAKÁ NA ODOSLANIE MAILU';
 const CAKAJUCE_STAV_ODOSLANE = 'ČAKÁ NA POTVRDENIE';
 const POTVRDENIE_ODKLAD_SEKUND = 15;      // odpočet na stránke pred odoslaním mailu (čas na opravu e-mailu)
@@ -1968,6 +1993,9 @@ function getPendingSheet_() {
     sheet.getRange(1, 1, sheet.getMaxRows(), 2).setNumberFormat('@'); // dátum a čas ako text, nech ich Sheets nepreklopí
     sheet.setFrozenRows(1);
     try { ss.setActiveSheet(povodny); } catch (err) {}
+  } else if (sheet.getLastColumn() < CAKAJUCE_HLAVICKA.length) {
+    // starší hárok bez stĺpca Potvrdiť ručne: doplní sa hlavička
+    sheet.getRange(1, CAKAJUCE_STLPEC_POTVRDIT).setValue(CAKAJUCE_HLAVICKA[CAKAJUCE_STLPEC_POTVRDIT - 1]).setFontWeight('bold');
   }
   return sheet;
 }
@@ -2244,7 +2272,7 @@ function expiredConfirmResult_() {
 }
 
 // Spoločná kontrola pre oba kroky. Vráti {vysledok: {title, inner}} (niečo nesedí) alebo {sheet, p}.
-function findConfirmable_(id, code) {
+function findConfirmable_(id, code, bezKodu) {
   id = String(id || '');
   if (!UUID_REGEX.test(id)) return { vysledok: confirmResult_('Neplatný odkaz', '<p class="center">Tento odkaz nie je platný.</p>') };
   if (isConfirmed_(id)) {
@@ -2252,7 +2280,7 @@ function findConfirmable_(id, code) {
   }
   const found = findPending_(id);
   if (!found.p || !isPendingActive_(found.p.r, Date.now())) return { vysledok: expiredConfirmResult_() };
-  if (String(found.p.r[10]) !== String(code || '')) {
+  if (!bezKodu && String(found.p.r[10]) !== String(code || '')) {
     return { vysledok: confirmResult_('Tento odkaz už neplatí', '<p class="center">E-mail pri tejto rezervácii sa medzitým zmenil. Použi odkaz z najnovšieho mailu.</p>') };
   }
   return found;
@@ -2299,12 +2327,13 @@ function doConfirm_(id, code) {
   return bookingPage_(v.title, v.inner);
 }
 
-function confirmBooking_(id, code) {
+// bezKodu = ručné potvrdenie holičom v tabuľke (checkbox), inak sa vyžaduje kód z mailu.
+function confirmBooking_(id, code, bezKodu) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(15000)) return confirmResult_('Skús znova', '<p class="center">Server je práve vyťažený, skús to o chvíľu.</p>');
   let r;
   try {
-    const f = findConfirmable_(id, code);
+    const f = findConfirmable_(id, code, bezKodu);
     if (f.vysledok) return f.vysledok;
     r = f.p.r;
     const datum = plain_(r[0]);
