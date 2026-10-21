@@ -499,6 +499,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Prvotné nastavenie UI pri štarte stránky
     updateSelectedTerminUI();
+
+    // Kalendár sa sám potichu obnovuje (zrušený / vypršaný / nový termín sa ukáže bez refreshu stránky)
+    setInterval(() => {
+        if (document.visibilityState === 'visible' && Date.now() - lastRefreshAt >= 25000) refreshData({ silent: true });
+    }, 30000);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && Date.now() - lastRefreshAt > 5000) refreshData({ silent: true });
+    });
     // --- PRIDANÉ: Spustenie "živých hodín" každú 1 minútu (60000 ms) ---
     let lastMinute = -1;
     setInterval(() => {
@@ -513,7 +521,58 @@ document.addEventListener('DOMContentLoaded', async () => {
     }, 1000);
 });
 
-async function refreshData() {
+// Poradové číslo načítania: odpoveď staršieho načítania nikdy neprepíše novšiu (napr. pomalá odpoveď tichého
+// obnovenia po kliknutí na termín by inak mohla vrátiť zastaranú obsadenosť).
+let refreshSeq = 0;
+let lastRefreshAt = 0;
+
+// Tiché obnovenie kalendára na pozadí (bez "Aktualizujem bojové plány..."): beží každých ~30 s, po návrate na kartu,
+// po kliknutí na termín a po zmene stavu rezervácie. Prekreslí sa len keď sa dáta naozaj zmenili. Zachová sa posun
+// tabuľky. Recenzie a galéria sa tu nemenia (neprekresľujú sa obrázky).
+async function refreshDataSilently() {
+    const seq = ++refreshSeq;
+    try {
+        const response = await fetch(SCRIPT_URL);
+        if (!response.ok) return;
+        const fresh = await response.json();
+        if (seq !== refreshSeq || !fresh || !Array.isArray(fresh.bookings)) return;
+        const sig = (d) => JSON.stringify([d.bookings, d.custom, d.defaultHours]);
+        const changed = sig(fresh) !== sig(globalData);
+        globalData = Object.assign({}, globalData, { bookings: fresh.bookings, custom: fresh.custom, defaultHours: fresh.defaultHours });
+        if (changed) renderTimetableKeepingScroll();
+        validateSelectedSlot();
+    } catch (e) {
+        // bez spojenia: skúsi sa pri ďalšom kole
+    } finally {
+        lastRefreshAt = Date.now();
+    }
+}
+
+function renderTimetableKeepingScroll() {
+    const c = document.querySelector('.timetable-container');
+    const top = c ? c.scrollTop : 0;
+    const left = c ? c.scrollLeft : 0;
+    updateUI();
+    if (c) { c.scrollTop = top; c.scrollLeft = left; }
+}
+
+// Je vybraný termín stále voľný? Ak ho medzitým niekto obsadil (alebo sa zmenili otváracie hodiny), výber sa zruší.
+function validateSelectedSlot() {
+    const date = document.getElementById('date').value;
+    const time = document.getElementById('time').value;
+    if (!date || !time) return;
+    const stillFree = getProcessedSlotsForDate(date).some(s =>
+        !s.isContinuation && !s.isForceBooked && s.originalDate === date && s.originalTime === time);
+    if (stillFree) return;
+    document.getElementById('date').value = '';
+    document.getElementById('time').value = '';
+    updateSelectedTerminUI();
+    renderTimetable();
+    showToast('Tento termín si medzitým niekto zarezervoval. Vyber si prosím iný.', 'error');
+}
+
+async function refreshData(opts) {
+    if (opts && opts.silent) return refreshDataSilently();
     const container = document.querySelector('.timetable-container');
     const btnGoToCalendar = document.getElementById('btn-go-to-calendar');
     const calendarBtns = document.querySelector(".week-controls");
@@ -540,10 +599,13 @@ async function refreshData() {
         calendarBtns.style.pointerEvents = "none";
     }
 
+    const seq = ++refreshSeq;
     try {
         const response = await fetch(SCRIPT_URL);
         if (response.ok) {
-            globalData = await response.json();
+            const data = await response.json();
+            if (seq !== refreshSeq) return; // medzitým prebehlo novšie načítanie
+            globalData = data;
             renderReviews(globalData.reviews);
             renderGallery(globalData.gallery);
         }
@@ -565,7 +627,9 @@ async function refreshData() {
         calendarBtns.style.pointerEvents = "all";
     }
 
+        lastRefreshAt = Date.now();
         updateUI();
+        validateSelectedSlot();
     }
 }
 
@@ -755,6 +819,7 @@ function renderTimetable() {
                         updateSelectedTerminUI();
                         renderTimetable();
                         if (!isDesktopLayout()) document.querySelector('.booking-container').scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        refreshData({ silent: true }); // overí čerstvými dátami, či termín medzičasom nikto nezobral
                     };
                 }
                 
@@ -896,6 +961,14 @@ document.getElementById("booking-form").addEventListener("submit", async functio
 
         if (result && result.error) {
             showToast(result.error, "error");
+            if (/termín/i.test(result.error)) {
+                // Termín je obsadený / neplatný: výber sa zruší a kalendár obnoví, nech si zákazník hneď vyberie iný.
+                document.getElementById("date").value = "";
+                document.getElementById("time").value = "";
+                updateSelectedTerminUI();
+                renderTimetable();
+                refreshData({ silent: true });
+            }
         } else if (result && result.status === 'pending') {
             // Termín je držaný, mail s potvrdením odíde po odpočte v paneli (dovtedy sa dá opraviť e-mail).
             startPending({ id: result.id, key: result.key, meno, termin: formatTermin(datum, cas, sluzba) }, {
@@ -1072,7 +1145,7 @@ function applyPendingState(s, seq) {
     if (PENDING_FINAL.includes(ps.state)) {
         ps.editing = false;
         stopPendingTimer();
-        if (changed) refreshData(); // termín sa v kalendári natrvalo obsadil alebo uvoľnil
+        if (changed) refreshData({ silent: true }); // termín sa v kalendári natrvalo obsadil alebo uvoľnil
         if (ps.minimized) showPendingPanel(); // výsledok ukážeme, aj keď bol panel zmenšený
     } else {
         startPendingTimer();
