@@ -9,7 +9,7 @@ const SHEET_NAME = 'Rezervácie';
 const SHEET_CUSTOM = 'Otv. hodiny mimo bežné';
 const SHEET_DEFAULT = 'Bežné otv. hodiny';
 const EMAIL_BARBAR = 'matusjacko1@gmail.com';
-const MIESTO = 'B02/321, Purkyňovy koleje'; // kde sa strihá (maily, stránka potvrdenia; na webe v index.html)
+const MIESTO = 'B02/321, Purkyňovy koleje'; // kde sa strihá: len v mailoch a na stránke potvrdenia (odkaz z mailu), zámerne NIE na verejnom webe
 const MAIL_NAZOV = 'Barbar Shop'; // meno odosielateľa, ktoré uvidia príjemcovia vo svojej schránke
 
 // --- VALIDÁCIA VSTUPU ---

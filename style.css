@@ -1379,17 +1379,6 @@ footer a:hover {
     cursor: pointer;
 }
 
-/* miesto strihania pod nadpisom formulára */
-.place-note {
-    margin: -6px 0 18px 0;
-    text-align: center;
-    font-size: 0.95rem;
-}
-
-.place-note strong {
-    color: var(--gold);
-}
-
 /* výber služby: kým nie je nič zvolené, text vyzerá ako placeholder */
 select:invalid {
     color: #999;
