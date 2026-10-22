@@ -10,6 +10,12 @@ const SHEET_CUSTOM = 'Otv. hodiny mimo bežné';
 const SHEET_DEFAULT = 'Bežné otv. hodiny';
 const EMAIL_BARBAR = 'matusjacko1@gmail.com';
 const MIESTO = 'B02/321, Purkyňovy koleje'; // kde sa strihá: len v mailoch a na stránke potvrdenia (odkaz z mailu), zámerne NIE na verejnom webe
+// Adresa web aplikácie, ktorá ide do odkazov v mailoch (recenzia, potvrdenie, zrušenie, schválenie). MUSÍ sedieť so SCRIPT_URL
+// v script.js a po každom NOVOM nasadení (nie po novej verzii) sa tu prepíše. ScriptApp.getService().getUrl() sa na to nedá
+// spoľahnúť: v triggeroch (napr. denný mail s prosbou o recenziu) vrátilo adresu nasadenia, ktoré už neexistuje, a
+// zákazník dostal 'Súbor momentálne nie je možné otvoriť'.
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbw65KS-ksdoc0ep2pt3YdrTCZY39zaN0EuXW3rzIHx2gAEyvvy4kyRd8SFHSESTISJZmw/exec';
+function getWebAppUrl_() { return WEB_APP_URL; }
 const MAIL_NAZOV = 'Barbar Shop'; // meno odosielateľa, ktoré uvidia príjemcovia vo svojej schránke
 
 // --- VALIDÁCIA VSTUPU ---
@@ -621,7 +627,7 @@ function doGet(e) {
         template.meno = data[i][3];
         template.datum = data[i][0]; 
         template.cas = data[i][1].replace(/^'/, '');
-        template.scriptUrl = ScriptApp.getService().getUrl();
+        template.scriptUrl = getWebAppUrl_();
         template.fontFaceCss = fontFaceCss();
         template.busyCss = BUSY_BUTTON_CSS;
         template.busyJs = BUSY_BUTTON_JS;
@@ -637,7 +643,7 @@ function doGet(e) {
       template.meno = plain_(pend.p.r[3]);
       template.datum = plain_(pend.p.r[0]);
       template.cas = plain_(pend.p.r[1], 'HH:mm');
-      template.scriptUrl = ScriptApp.getService().getUrl();
+      template.scriptUrl = getWebAppUrl_();
       template.fontFaceCss = fontFaceCss();
       template.busyCss = BUSY_BUTTON_CSS;
       template.busyJs = BUSY_BUTTON_JS;
@@ -763,7 +769,7 @@ function doGet(e) {
       template.cas = found.cas; 
       template.jeHolic = false; 
       template.emailKlienta = found.email; 
-      template.cancelUrl = ScriptApp.getService().getUrl() + "?action=cancelPage&id=" + id + "&role=klient"; 
+      template.cancelUrl = getWebAppUrl_() + "?action=cancelPage&id=" + id + "&role=klient"; 
       template.viewUrl = "#"; 
       template.vyzvaText = "Ak chceš tento termín zrušiť, klikni na tlačidlo nižšie:";
       
@@ -1546,7 +1552,7 @@ function submitReview(payload) {
 
     try {
       const ss = SpreadsheetApp.getActiveSpreadsheet();
-      const baseUrl = ScriptApp.getService().getUrl();
+      const baseUrl = getWebAppUrl_();
       const approveUrl = baseUrl + '?action=approveReview&id=' + id + '&t=' + reviewToken_(id, 'approve');
       const deleteUrl = baseUrl + '?action=deleteReview&id=' + id + '&t=' + reviewToken_(id, 'delete');
       const sheetUrl = ss.getUrl() + '#gid=' + getReviewSheet_().getSheetId();
@@ -1677,7 +1683,7 @@ function showApproveReviewPage_(id, token) {
     '<div class="quote">' + escapeHtml(r.text) + '</div>' +
     reviewPhotoPreviewHtml_(r.raw) +
     '<div class="who">Zobrazí sa ako: <strong>' + escapeHtml(r.name) + '</strong></div>' +
-    '<form method="GET" action="' + escapeHtml(ScriptApp.getService().getUrl()) + '" target="_top">' +
+    '<form method="GET" action="' + escapeHtml(getWebAppUrl_()) + '" target="_top">' +
     '<input type="hidden" name="action" value="doApproveReview"><input type="hidden" name="id" value="' + escapeHtml(id) + '"><input type="hidden" name="t" value="' + escapeHtml(token) + '">' +
     '<label for="odpoved">Tvoja odpoveď pod recenziou (nepovinné)</label>' +
     '<textarea id="odpoved" name="odpoved" maxlength="500" placeholder="Napr. Ďakujeme, tešíme sa na ďalšiu návštevu!"></textarea>' +
@@ -1717,7 +1723,7 @@ function showDeleteReviewPage_(id, token) {
     reviewPhotoPreviewHtml_(r.raw) +
     '<div class="who">Od: <strong>' + escapeHtml(r.name) + '</strong>' + (r.approved ? ' (zatiaľ zverejnená na webe)' : '') + '</div>' +
     '<p style="text-align:center;color:#ff8a80">Recenzia (aj jej fotky) sa nenávratne odstráni z tabuľky aj z webu.</p>' +
-    '<form method="GET" action="' + escapeHtml(ScriptApp.getService().getUrl()) + '" target="_top">' +
+    '<form method="GET" action="' + escapeHtml(getWebAppUrl_()) + '" target="_top">' +
     '<input type="hidden" name="action" value="doDeleteReview"><input type="hidden" name="id" value="' + escapeHtml(id) + '"><input type="hidden" name="t" value="' + escapeHtml(token) + '">' +
     '<button type="submit" class="btn" style="background:#d32f2f" data-busy="MAŽEM...">ZMAZAŤ NAVŽDY</button></form>');
 }
@@ -1828,7 +1834,7 @@ function sendReviewRequests() {
     const data = sheet.getDataRange().getDisplayValues();
     const dnes = bratislavaNow_();
     dnes.setHours(0, 0, 0, 0);
-    const baseUrl = ScriptApp.getService().getUrl();
+    const baseUrl = getWebAppUrl_();
 
     for (let i = 1; i < data.length; i++) {
       if (data[i][REVIEW_STLPEC_MAILU - 1]) continue;
@@ -2111,7 +2117,7 @@ function releasePending_(sheet, p, dovod) {
 
 function sendPendingMail_(r) {
   const id = r[6];
-  const baseUrl = ScriptApp.getService().getUrl();
+  const baseUrl = getWebAppUrl_();
   const datum = plain_(r[0]);
   const cas = plain_(r[1], 'HH:mm');
   const sablona = HtmlService.createTemplateFromFile('EmailSablona');
@@ -2151,7 +2157,7 @@ function deliverPendingMail_(sheet, p) {
 }
 
 function sendBarberNewBookingMail_(meno, sluzba, datum, cas, email, id) {
-  const baseUrl = ScriptApp.getService().getUrl();
+  const baseUrl = getWebAppUrl_();
   const sablona = HtmlService.createTemplateFromFile('EmailSablona');
   sablona.titulok = "Nová rezervácia!";
   sablona.meno = "Roman";
@@ -2602,8 +2608,7 @@ function checkUpcomingConflicts() {
 
         if (!platneSloty.includes(bStart)) {
           let resId = rezData[i][7]; 
-          let baseUrl = PropertiesService.getScriptProperties().getProperty('WEB_APP_URL');
-          if (!baseUrl) baseUrl = ScriptApp.getService().getUrl();
+          const baseUrl = getWebAppUrl_();
 
           let dovodText = isEarlyMorningTomorrow ? 
               "je naplánovaný na zajtrajšie ráno, ale tvoj harmonogram vyzerá ináč" : 
