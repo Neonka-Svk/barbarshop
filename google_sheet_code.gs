@@ -154,13 +154,18 @@ function validateBookingData(data) {
 
   if (ALLOWED_SLUZBY.indexOf(data.sluzba) === -1) return 'Neplatná služba.';
 
-  if (!DATE_REGEX.test(data.datum) || !TIME_REGEX.test(data.cas)) return 'Neplatný formát termínu.';
+  return validateSlotData_(data.datum, data.cas);
+}
 
-  const dateParts = data.datum.split('-').map(Number);
+// Overenie samotného termínu (formát, aspoň MIN_MINUT_VOPRED vopred, v otváracích hodinách). Používa objednávka aj zmena termínu.
+function validateSlotData_(datum, cas) {
+  if (!DATE_REGEX.test(datum) || !TIME_REGEX.test(cas)) return 'Neplatný formát termínu.';
+
+  const dateParts = datum.split('-').map(Number);
   const y = dateParts[0], m = dateParts[1], d = dateParts[2];
   if (m < 1 || m > 12 || d < 1 || d > 31) return 'Neplatný dátum.';
 
-  const timeParts = data.cas.split(':').map(Number);
+  const timeParts = cas.split(':').map(Number);
   const slotStart = new Date(y, m - 1, d, timeParts[0], timeParts[1], 0);
   if (isNaN(slotStart.getTime())) return 'Neplatný dátum.';
 
@@ -172,7 +177,7 @@ function validateBookingData(data) {
   const diffMin = (slotStart.getTime() - now.getTime()) / 60000;
   if (diffMin < MIN_MINUT_VOPRED) return `Termín je možné rezervovať minimálne ${MIN_MINUT_VOPRED} minút vopred.`;
 
-  if (!isSlotAvailable(data.datum, data.cas)) return 'Tento termín už nie je dostupný. Obnov si stránku a vyber iný.';
+  if (!isSlotAvailable(datum, cas)) return 'Tento termín už nie je dostupný. Obnov si stránku a vyber iný.';
 
   return null;
 }
@@ -529,6 +534,7 @@ function doPost(e) {
 
     // Akcie nad čakajúcou rezerváciou z panela po odoslaní objednávky (odoslať mail, zmeniť e-mail, zrušiť, stav).
     if (data && data.action) {
+      if (data.action === 'reschedule') return jsonOut(rescheduleBooking_(data));
       return jsonOut(handlePendingAction_(data));
     }
 
@@ -616,6 +622,10 @@ function doGet(e) {
   const htmlStart = "<style>" + fontFaceCss() + "</style><div style='font-family:Roboto, Helvetica, Arial, sans-serif; background:#1a1a1a; color:#f0c419; height:100vh; display:flex; justify-content:center; align-items:center; text-align:center; margin:0;'><h2>";
   const htmlEnd = "</h2></div>";
 
+  // --- Kalendár (.ics) a zmena termínu: údaje pre web ---
+  if (action === 'ics' && id) return icsResponse_(id);
+  if (action === 'rescheduleInfo' && id) return jsonOut(rescheduleInfo_(id));
+
   // --- AKCIA 1: ZOBRAZENIE STRÁNKY NA ZADANIE DÔVODU ---
   if (action === 'cancelPage' && id) {
     const data = sheetRez.getDataRange().getDisplayValues(); 
@@ -631,6 +641,8 @@ function doGet(e) {
         template.fontFaceCss = fontFaceCss();
         template.busyCss = BUSY_BUTTON_CSS;
         template.busyJs = BUSY_BUTTON_JS;
+        // Zmena termínu namiesto zrušenia (len zákazník, kým sa termín dá ešte zmeniť)
+        template.zmenaUrl = (role !== 'holic' && rescheduleInfo_(id).ok) ? rescheduleUrl_(id) : '';
         return template.evaluate().setTitle("Zrušenie rezervácie").addMetaTag('viewport', 'width=device-width, initial-scale=1');
       }
     }
@@ -770,6 +782,12 @@ function doGet(e) {
       template.jeHolic = false; 
       template.emailKlienta = found.email; 
       template.cancelUrl = getWebAppUrl_() + "?action=cancelPage&id=" + id + "&role=klient"; 
+      const ymdView = slovakDateToYMD_(found.datum);
+      if (ymdView) {
+        template.calUrl = googleCalendarUrl_(ymdView, found.cas, found.sluzba, id);
+        template.icsUrl = icsUrl_(id);
+        template.zmenaUrl = rescheduleInfo_(id).ok ? rescheduleUrl_(id) : '';
+      }
       template.viewUrl = "#"; 
       template.vyzvaText = "Ak chceš tento termín zrušiť, klikni na tlačidlo nižšie:";
       
@@ -897,7 +915,7 @@ function onSheetChange() {
 // Spusti RAZ ručne z editora (po nasadení novej verzie; opakované spustenie nič nezdvojí): založí triggery
 // pre cache aj pre nepotvrdené rezervácie a hneď naplní cache.
 function installSpeedTriggers() {
-  const moje = ['refreshPublicCache', 'onSheetChange', 'processPendingReservations', 'sendBarberDigest'];
+  const moje = ['refreshPublicCache', 'onSheetChange', 'processPendingReservations', 'sendBarberDigest', 'updateStats'];
   ScriptApp.getProjectTriggers().forEach(function(t) {
     if (moje.indexOf(t.getHandlerFunction()) !== -1) ScriptApp.deleteTrigger(t);
   });
@@ -905,6 +923,7 @@ function installSpeedTriggers() {
   ScriptApp.newTrigger('onSheetChange').forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet()).onChange().create();
   ScriptApp.newTrigger('processPendingReservations').timeBased().everyMinutes(1).create();
   ScriptApp.newTrigger('sendBarberDigest').timeBased().everyDays(1).atHour(SUHRN_HODINA).inTimezone('Europe/Bratislava').create();
+  ScriptApp.newTrigger('updateStats').timeBased().everyDays(1).atHour(1).inTimezone('Europe/Bratislava').create();
   refreshPublicCache();
   console.log('Triggery založené: refreshPublicCache (každých 10 minút), onSheetChange (pri zmene tabuľky), processPendingReservations (každú minútu), sendBarberDigest (denne okolo ' + SUHRN_HODINA + ':00).');
 }
@@ -1005,7 +1024,15 @@ function buildPublicData_(vynutitGaleriu) {
     console.error('Načítanie galérie zlyhalo (kalendár ide ďalej):', err);
   }
 
-  return { data: { bookings, custom: customRanges, defaultHours, reviews, gallery }, uplne: uplne };
+  let notices = [];
+  try {
+    notices = getPublicNotices_();
+  } catch (err) {
+    uplne = false;
+    console.error('Načítanie oznamov zlyhalo (kalendár ide ďalej):', err);
+  }
+
+  return { data: { bookings, custom: customRanges, defaultHours, reviews, gallery, notices }, uplne: uplne };
 }
 
 // --- LOGIKA PRE ZRUŠENIE A UPOZORNENIA PRIAMO V TABUĽKE ---
@@ -1657,7 +1684,7 @@ function cardPage_(title, innerHtml, tabTitle) {
     '.link{display:block;text-align:center;color:#f0c419;margin-top:16px;font-size:14px}.ok{font-size:60px;color:#4caf50;text-align:center}p{line-height:1.5}' +
     '.photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px;margin:14px 0}.photos img{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:6px;display:block}' +
     '.details{background:#1a1a1a;border-left:4px solid #f0c419;border-radius:6px;padding:12px 15px;margin:16px 0;line-height:1.7;overflow-wrap:anywhere}.details b{color:#f0c419}' +
-    '.btn.gold{background:#f0c419;color:#1a1a1a}.btn.gold:hover{background:#d9b016}.center{text-align:center}' +
+    '.btn.gold{background:#f0c419;color:#1a1a1a}.btn.gold:hover{background:#d9b016}.btn.ghost{background:transparent;color:#f0c419;border:1px solid #f0c419}.btn.ghost:hover{background:rgba(240,196,25,.12)}.center{text-align:center}' +
     BUSY_BUTTON_CSS +
     '</style></head><body><div class="card"><h2>' + escapeHtml(title) + '</h2>' + innerHtml + '</div><script>' + BUSY_BUTTON_JS + '</script></body></html>';
   return HtmlService.createHtmlOutput(html).setTitle(tabTitle).addMetaTag('viewport', 'width=device-width, initial-scale=1');
@@ -1973,7 +2000,15 @@ function onOpen() {
   SpreadsheetApp.getUi().createMenu('🛠️ Správa rezervácií')
     .addItem('Vymazať staré rezervácie (7+ dni)', 'cleanupOldReservations')
     .addItem('Obnoviť galériu na webe', 'clearGalleryCache')
+    .addItem('Obnoviť štatistiky', 'updateStatsFromMenu')
     .addToUi();
+
+  // Hárok "Oznamy" (texty nad kalendárom na webe) sa vytvorí sám, ak ešte neexistuje.
+  try {
+    getNoticeSheet_();
+  } catch (err) {
+    console.error('Vytvorenie hárka Oznamy zlyhalo:', err);
+  }
 
   // Staršiemu hárku "Recenzie" doplní stĺpec "Zmazať recenziu?" (hlavička + checkboxy).
   try {
@@ -2084,6 +2119,16 @@ function finishedState_(id) {
     }
   }
   return 'gone';
+}
+
+// Stav pre web po skončení čakania. Pri potvrdenej rezervácii pridá odkazy do kalendára: miesto sa tak na web dostane až
+// teraz, od servera, a nie je zapísané v kóde stránky.
+function finishedResponse_(id) {
+  const state = finishedState_(id);
+  if (state !== 'confirmed') return { state: state };
+  const f = findConfirmedReservation_(id);
+  if (!f) return { state: state };
+  return { state: state, cal: googleCalendarUrl_(f.ymd, f.cas, f.sluzba, id), ics: icsUrl_(id) };
 }
 
 function isConfirmed_(id) {
@@ -2200,7 +2245,7 @@ function handlePendingAction_(data) {
   // Stav sa pýta často (stránka sa každých pár sekúnd pozrie, či už zákazník klikol v maile), preto bez zámku.
   if (action === 'status') {
     const found = findPending_(id);
-    if (!found.p) return { state: finishedState_(id) };
+    if (!found.p) return finishedResponse_(id);
     if (String(found.p.r[11]) !== hashKey_(key)) return { error: 'Neplatná relácia.' };
     const now = Date.now();
     if (!isPendingActive_(found.p.r, now)) return { state: 'expired' };
@@ -2213,7 +2258,7 @@ function handlePendingAction_(data) {
   try {
     const now = Date.now();
     const found = findPending_(id);
-    if (!found.p) return { state: finishedState_(id) };
+    if (!found.p) return finishedResponse_(id);
     if (String(found.p.r[11]) !== hashKey_(key)) return { error: 'Neplatná relácia.' };
 
     if (!isPendingActive_(found.p.r, now)) {
@@ -2315,7 +2360,8 @@ function findConfirmable_(id, code, bezKodu) {
   id = String(id || '');
   if (!UUID_REGEX.test(id)) return { vysledok: confirmResult_('Neplatný odkaz', '<p class="center">Tento odkaz nie je platný.</p>') };
   if (isConfirmed_(id)) {
-    return { vysledok: confirmResult_('Termín je už potvrdený', '<div class="ok">&#10003;</div><p class="center">Tento termín si už potvrdil. Tešíme sa na teba!</p>') };
+    const uz = findConfirmedReservation_(id);
+    return { vysledok: confirmResult_('Termín je už potvrdený', '<div class="ok">&#10003;</div><p class="center">Tento termín si už potvrdil. Tešíme sa na teba!</p>' + (uz ? calendarButtonsHtml_(id, uz.ymd, uz.cas, uz.sluzba, true) : '')) };
   }
   const found = findPending_(id);
   if (!found.p || !isPendingActive_(found.p.r, Date.now())) return { vysledok: expiredConfirmResult_() };
@@ -2407,7 +2453,442 @@ function confirmBooking_(id, code, bezKodu) {
     console.error('Mail holičovi o novej rezervácii sa nepodarilo odoslať:', err);
   }
   return confirmResult_('Termín je potvrdený', '<div class="ok">&#10003;</div>' + bookingDetailsHtml_(r) +
-    '<p class="center">Sila a česť! Tešíme sa na teba. Ak budeš potrebovať termín zrušiť, použi tlačidlo v maile.</p>');
+    '<p class="center">Sila a česť! Tešíme sa na teba. Ak budeš potrebovať termín zrušiť, použi tlačidlo v maile.</p>' +
+    (slovakDateToYMD_(plain_(r[0])) ? calendarButtonsHtml_(String(id), slovakDateToYMD_(plain_(r[0])), plain_(r[1], 'HH:mm'), plain_(r[4]), true) : ''));
+}
+
+// ===================== PRIDAŤ DO KALENDÁRA + ZMENA TERMÍNU =====================
+// Po potvrdení termínu si zákazník môže pridať udalosť do kalendára (odkaz do Google Kalendára alebo súbor .ics pre
+// Apple/Outlook). Pripomienky riešia kalendáre samy, preto žiadne ďalšie maily. Zmena termínu presunie potvrdenú
+// rezerváciu na iný voľný čas (rovnaké ID, takže odkazy z mailov ďalej platia). Zákazník dostane jeden mail
+// (len ak je kvóta v poriadku), holič upozornenie cez sendBarberMailOrDefer_. Najviac ZMENA_MAX zmien na rezerváciu.
+const ZMENA_MAX = 2;
+const REZ_STLPEC_ZMENY = 11; // K v hárku Rezervácie: počet zmien termínu
+const TRVANIE_TERMINU_MIN = 90;
+
+function pad2_(n) { return String(n).padStart(2, '0'); }
+
+// Pripočíta minúty k dátumu a času (aj cez polnoc), čisto aritmetikou bez časových zón.
+function addMinutes_(ymd, hm, minutes) {
+  const p = String(ymd).split('-').map(Number);
+  const t = String(hm).split(':').map(Number);
+  const d = new Date(Date.UTC(p[0], p[1] - 1, p[2], t[0], t[1] + minutes));
+  return { ymd: d.getUTCFullYear() + '-' + pad2_(d.getUTCMonth() + 1) + '-' + pad2_(d.getUTCDate()), hm: pad2_(d.getUTCHours()) + ':' + pad2_(d.getUTCMinutes()) };
+}
+
+function calendarEventTimes_(ymd, hm) {
+  const end = addMinutes_(ymd, hm, TRVANIE_TERMINU_MIN);
+  return {
+    start: ymd.replace(/-/g, '') + 'T' + hm.replace(':', '') + '00',
+    end: end.ymd.replace(/-/g, '') + 'T' + end.hm.replace(':', '') + '00'
+  };
+}
+
+function cancelPageUrl_(id) { return getWebAppUrl_() + '?action=cancelPage&id=' + id + '&role=klient'; }
+function rescheduleUrl_(id) { return SITE_URL + '/?zmena=' + id; }
+function icsUrl_(id) { return getWebAppUrl_() + '?action=ics&id=' + id; }
+
+function googleCalendarUrl_(ymd, hm, sluzba, id) {
+  const t = calendarEventTimes_(ymd, hm);
+  return 'https://calendar.google.com/calendar/render?action=TEMPLATE' +
+    '&text=' + encodeURIComponent('Strih - Barbar Shop (' + sluzba + ')') +
+    '&dates=' + t.start + '/' + t.end +
+    '&ctz=' + encodeURIComponent('Europe/Bratislava') +
+    '&location=' + encodeURIComponent(MIESTO) +
+    '&details=' + encodeURIComponent('Služba: ' + sluzba + '\nZrušiť alebo zmeniť termín: ' + cancelPageUrl_(id));
+}
+
+function icsEscape_(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+}
+
+// Riadky v .ics majú mať najviac 75 bajtov: dlhšie sa zalamujú (pokračovanie začína medzerou).
+function foldIcsLine_(line) {
+  const out = [];
+  let rest = line;
+  while (rest.length > 60) { out.push(rest.slice(0, 60)); rest = ' ' + rest.slice(60); }
+  out.push(rest);
+  return out.join('\r\n');
+}
+
+// Čas bez časovej zóny ("plávajúci"): v kalendári sa ukáže presne 16:00 bez ohľadu na to, kde sa zákazník nachádza.
+function buildIcs_(id, ymd, hm, sluzba) {
+  const t = calendarEventTimes_(ymd, hm);
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+  const lines = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Barbar Shop//Rezervacia//SK', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    'UID:' + id + '@barbarshop',
+    'DTSTAMP:' + stamp,
+    'DTSTART:' + t.start,
+    'DTEND:' + t.end,
+    'SUMMARY:' + icsEscape_('Strih - Barbar Shop (' + sluzba + ')'),
+    'LOCATION:' + icsEscape_(MIESTO),
+    'DESCRIPTION:' + icsEscape_('Služba: ' + sluzba + '\nZrušiť alebo zmeniť termín: ' + cancelPageUrl_(id)),
+    'END:VEVENT', 'END:VCALENDAR'
+  ];
+  return lines.map(foldIcsLine_).join('\r\n') + '\r\n';
+}
+
+// Potvrdená rezervácia podľa ID: {row, ymd, cas, sluzba, meno, email, zmeny} alebo null. Čítať pod zámkom pri zmene.
+function findConfirmedReservation_(id) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  if (!sheet) return null;
+  const data = sheet.getDataRange().getDisplayValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][7] === id) {
+      const ymd = slovakDateToYMD_(data[i][0]);
+      if (!ymd) return null;
+      return { sheet: sheet, row: i + 1, ymd: ymd, datumSk: data[i][0], cas: String(data[i][1]).replace(/^'/, '').trim(),
+               sluzba: data[i][4], meno: data[i][3], email: data[i][5], zmeny: Number(data[i][REZ_STLPEC_ZMENY - 1]) || 0 };
+    }
+  }
+  return null;
+}
+
+function slotStartMs_(ymd, hm) {
+  const p = ymd.split('-').map(Number);
+  const t = hm.split(':').map(Number);
+  return new Date(p[0], p[1] - 1, p[2], t[0], t[1], 0).getTime();
+}
+
+function icsResponse_(id) {
+  const f = UUID_REGEX.test(String(id || '')) ? findConfirmedReservation_(id) : null;
+  if (!f) return ContentService.createTextOutput('Rezervácia sa nenašla.').setMimeType(ContentService.MimeType.TEXT);
+  return ContentService.createTextOutput(buildIcs_(id, f.ymd, f.cas, f.sluzba)).setMimeType(ContentService.MimeType.ICAL);
+}
+
+// Tlačidlá pre stránky potvrdenia (kalendár + zmena termínu).
+function calendarButtonsHtml_(id, ymd, hm, sluzba, aj_zmena) {
+  return '<a class="btn gold" href="' + escapeHtml(googleCalendarUrl_(ymd, hm, sluzba, id)) + '" target="_blank" rel="noopener">PRIDAŤ DO GOOGLE KALENDÁRA</a>' +
+    '<a class="btn ghost" href="' + escapeHtml(icsUrl_(id)) + '" target="_blank" rel="noopener">STIAHNUŤ DO KALENDÁRA (.ICS)</a>' +
+    (aj_zmena ? '<a class="link" href="' + escapeHtml(rescheduleUrl_(id)) + '" target="_blank" rel="noopener">Zmeniť termín</a>' : '');
+}
+
+// Môže sa rezervácia ešte zmeniť? Vráti {ok, ...údaje} alebo {error}.
+function rescheduleInfo_(id) {
+  id = String(id || '');
+  if (!UUID_REGEX.test(id)) return { error: 'Neplatný odkaz.' };
+  const f = findConfirmedReservation_(id);
+  if (!f) return { error: 'Táto rezervácia sa nenašla (možno bola zrušená alebo ešte nebola potvrdená).' };
+  if (slotStartMs_(f.ymd, f.cas) <= bratislavaNow_().getTime()) return { error: 'Tento termín už prebehol, zmeniť sa nedá.' };
+  const zostava = ZMENA_MAX - f.zmeny;
+  if (zostava <= 0) return { error: 'Termín sa už nedá znova zmeniť. Zruš rezerváciu a vytvor novú.' };
+  return { ok: true, datum: f.ymd, cas: f.cas, sluzba: f.sluzba, zmenyZostava: zostava };
+}
+
+function rescheduleBooking_(data) {
+  const id = String(data.id || '');
+  if (!UUID_REGEX.test(id)) return { error: 'Neplatná požiadavka.' };
+  const chybaSlotu = validateSlotData_(data.datum, data.cas);
+  if (chybaSlotu) return { error: chybaSlotu };
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) return { error: 'Server je momentálne vyťažený, skús to prosím o chvíľu znova.' };
+  let f;
+  let povodny;
+  let zostava;
+  try {
+    f = findConfirmedReservation_(id);
+    if (!f) return { error: 'Táto rezervácia sa nenašla (možno bola zrušená).' };
+    if (slotStartMs_(f.ymd, f.cas) <= bratislavaNow_().getTime()) return { error: 'Tento termín už prebehol, zmeniť sa nedá.' };
+    if (f.zmeny >= ZMENA_MAX) return { error: 'Termín sa už nedá znova zmeniť. Zruš rezerváciu a vytvor novú.' };
+    if (f.ymd === data.datum && f.cas === data.cas) return { error: 'To je ten istý termín. Vyber si iný.' };
+    const [y, m, d] = data.datum.split('-');
+    const novyDatumSk = `${d}.${m}.${y}`;
+    if (isSlotTaken_(novyDatumSk, data.cas, Date.now())) return { error: 'Tento termín si medzitým niekto zarezervoval. Vyber si prosím iný.' };
+
+    povodny = { datumSk: f.datumSk, cas: f.cas };
+    const sheet = f.sheet;
+    sheet.getRange(f.row, 1, 1, 2).setValues([[novyDatumSk, "'" + data.cas]]);
+    sheet.getRange(f.row, 9).setValue(''); // upozornenie na konflikt v rozvrhu sa vyhodnotí odznova
+    if (!sheet.getRange(1, REZ_STLPEC_ZMENY).getValue()) sheet.getRange(1, REZ_STLPEC_ZMENY).setValue('Zmeny termínu');
+    sheet.getRange(f.row, REZ_STLPEC_ZMENY).setValue(f.zmeny + 1);
+    const lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+      sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).sort([{column: 1, ascending: true}, {column: 2, ascending: true}]);
+    }
+    invalidatePublicCache_();
+    zostava = ZMENA_MAX - (f.zmeny + 1);
+  } finally {
+    lock.releaseLock();
+  }
+
+  const novyDatumSk2 = data.datum.split('-').reverse().join('.');
+  // Mail zákazníkovi len pri dostatku kvóty (stránka mu výsledok ukáže aj tak). Adresu berieme z tabuľky, nie od klienta.
+  try {
+    if (!mailQuotaLow_()) sendRescheduleCustomerMail_(f, id, data.datum, data.cas, novyDatumSk2, zostava);
+  } catch (err) {
+    console.error('Mail o zmene termínu zákazníkovi sa nepodarilo odoslať:', err);
+  }
+  try {
+    sendBarberMailOrDefer_(
+      { subject: `Zmena termínu: ${f.meno} (${novyDatumSk2})`,
+        htmlBody: generateRescheduleBarberHtml_(f.meno, f.sluzba, povodny.datumSk, povodny.cas, novyDatumSk2, data.cas, f.email, id) },
+      { typ: 'Zmenené termíny', text: `${f.meno}: z ${povodny.datumSk} o ${povodny.cas} na ${novyDatumSk2} o ${data.cas} (${f.sluzba})`, odkazy: [{ t: 'Zrušiť', u: getWebAppUrl_() + '?action=cancelPage&id=' + id + '&role=holic' }] }
+    );
+  } catch (err) {
+    console.error('Mail holičovi o zmene termínu zlyhal:', err);
+  }
+  return { status: 'ok', id: id, datum: data.datum, cas: data.cas, sluzba: f.sluzba, zmenyZostava: zostava, cal: googleCalendarUrl_(data.datum, data.cas, f.sluzba, id), ics: icsUrl_(id) };
+}
+
+function sendRescheduleCustomerMail_(f, id, ymd, cas, datumSk, zostava) {
+  const sablona = HtmlService.createTemplateFromFile('EmailSablona');
+  sablona.titulok = 'Termín zmenený';
+  sablona.meno = f.meno;
+  sablona.uvodnyText = 'Tvoj termín v Barbar Shope sme presunuli. Nové údaje:';
+  sablona.sluzba = f.sluzba;
+  sablona.datum = datumSk;
+  sablona.cas = cas;
+  sablona.cancelUrl = cancelPageUrl_(id);
+  sablona.viewUrl = getWebAppUrl_() + '?action=viewEmail&id=' + id;
+  sablona.calUrl = googleCalendarUrl_(ymd, cas, f.sluzba, id);
+  sablona.icsUrl = icsUrl_(id);
+  sablona.zmenaUrl = zostava > 0 ? rescheduleUrl_(id) : '';
+  sablona.vyzvaText = 'Ak chceš termín zrušiť, klikni na tlačidlo nižšie:';
+  sablona.jeHolic = false;
+  MailApp.sendEmail({ name: MAIL_NAZOV, to: f.email, subject: 'Barbar Shop - Termín zmenený (' + datumSk + ' o ' + cas + ')', htmlBody: sablona.evaluate().getContent() });
+}
+
+function generateRescheduleBarberHtml_(meno, sluzba, staryDatum, staryCas, novyDatum, novyCas, email, id) {
+  const sablona = HtmlService.createTemplateFromFile('EmailSablona');
+  sablona.titulok = 'Zmena termínu';
+  sablona.meno = 'Roman';
+  sablona.uvodnyText = `${meno} si presunul termín z ${staryDatum} o ${staryCas}. Nový termín:`;
+  sablona.sluzba = sluzba;
+  sablona.datum = novyDatum;
+  sablona.cas = novyCas;
+  sablona.emailKlienta = email;
+  sablona.cancelUrl = getWebAppUrl_() + '?action=cancelPage&id=' + id + '&role=holic';
+  sablona.viewUrl = getWebAppUrl_() + '?action=viewEmail&id=' + id;
+  sablona.vyzvaText = 'Ak potrebuješ tento termín zrušiť, klikni nižšie na tlačidlo:';
+  sablona.jeHolic = true;
+  return sablona.evaluate().getContent();
+}
+
+// ===================== OZNAMY NAD KALENDÁROM =====================
+// Hárok "Oznamy": text, voliteľné Od / Do (dátumy) a checkbox Zobraziť. Platné oznamy sa ukážu nad kalendárom
+// (viac oznamov sa na webe striedajú). Dovolenku rieš zatvorením dní v hárku "Otv. hodiny mimo bežné"
+// (stav ZAVRETÉ, rozpätie od-do); oznam je len text pre zákazníkov.
+const SHEET_OZNAMY = 'Oznamy';
+const OZNAMY_HLAVICKA = ['Oznam (text pre zákazníkov)', 'Od (dátum, nepovinné)', 'Do (dátum, nepovinné)', 'Zobraziť'];
+const OZNAMY_MAX = 5;
+const OZNAMY_MAX_ZNAKOV = 300;
+
+// Vytvorí hárok s ukážkovým (vypnutým) riadkom, ak ešte neexistuje. Volá sa pri otvorení tabuľky.
+function getNoticeSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_OZNAMY);
+  if (!sheet) {
+    const povodny = ss.getActiveSheet();
+    sheet = ss.insertSheet(SHEET_OZNAMY);
+    sheet.getRange(1, 1, 1, OZNAMY_HLAVICKA.length).setValues([OZNAMY_HLAVICKA]).setFontWeight('bold');
+    sheet.appendRow(['Príklad: Tento týždeň nestriham, od pondelka zase áno. (Zaškrtni Zobraziť, aby sa ukázal na webe.)', '', '', false]);
+    sheet.getRange(2, 4).insertCheckboxes();
+    sheet.setFrozenRows(1);
+    try { ss.setActiveSheet(povodny); } catch (err) {}
+  }
+  return sheet;
+}
+
+// 'yyyy-MM-dd', '' (prázdne) alebo null (nečitateľné).
+function parseNoticeDate_(v) {
+  if (v === '' || v == null) return '';
+  if (v instanceof Date) return Utilities.formatDate(v, 'Europe/Bratislava', 'yyyy-MM-dd');
+  const s = String(v).trim();
+  if (!s) return '';
+  let m = s.match(/^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})$/);
+  if (m) return m[3] + '-' + pad2_(m[2]) + '-' + pad2_(m[1]);
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return s;
+  return null;
+}
+
+function getPublicNotices_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_OZNAMY);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const today = Utilities.formatDate(new Date(), 'Europe/Bratislava', 'yyyy-MM-dd');
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, OZNAMY_HLAVICKA.length).getValues();
+  const out = [];
+  rows.forEach(function(r, i) {
+    const text = String(r[0] == null ? '' : r[0]).trim();
+    if (!text || r[3] === false) return;
+    const od = parseNoticeDate_(r[1]);
+    const doo = parseNoticeDate_(r[2]);
+    if (od === null || doo === null) {
+      console.error('Oznam v riadku ' + (i + 2) + ' má nečitateľný dátum (použi d.m.rrrr), preskakujem.');
+      return;
+    }
+    if ((od && today < od) || (doo && today > doo)) return;
+    out.push({ text: text.length > OZNAMY_MAX_ZNAKOV ? text.slice(0, OZNAMY_MAX_ZNAKOV - 1) + '…' : text });
+  });
+  return out.slice(0, OZNAMY_MAX);
+}
+
+// ===================== ŠTATISTIKY =====================
+// Hárok "Štatistiky" sa prepisuje automaticky (denne okolo 1:00 a z menu). Počíta sa z "Rezervácie" a z "Archív"
+// (v archíve ostáva dátum, služba a stav aj po anonymizácii mena a e-mailu). Ceny treba držať v súlade s index.html.
+const SHEET_STATISTIKY = 'Štatistiky';
+const CENY_SLUZIEB = { 'Pánsky strih': 100, 'Úprava brady': 50, 'Vlasy a brada': 150 }; // Kč
+
+function bar_(n, max) { return max > 0 ? '█'.repeat(Math.round(n / max * 20)) : ''; }
+
+function shiftYmd_(ymd, days) {
+  const p = ymd.split('-').map(Number);
+  const d = new Date(Date.UTC(p[0], p[1] - 1, p[2] + days));
+  return d.getUTCFullYear() + '-' + pad2_(d.getUTCMonth() + 1) + '-' + pad2_(d.getUTCDate());
+}
+
+function computeStats_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const nowBa = bratislavaNow_();
+  const dnesYmd = nowBa.getFullYear() + '-' + pad2_(nowBa.getMonth() + 1) + '-' + pad2_(nowBa.getDate());
+  const nowMs = nowBa.getTime();
+  const done = [];       // {ymd, cas, sluzba, email, meno}
+  let nadchadzajuce = 0, zrusilZakaznik = 0, zrusilHolic = 0, nepotvrdene = 0;
+
+  const sheetRez = ss.getSheetByName(SHEET_NAME);
+  if (sheetRez && sheetRez.getLastRow() > 1) {
+    sheetRez.getRange(2, 1, sheetRez.getLastRow() - 1, 8).getDisplayValues().forEach(function(r) {
+      const ymd = slovakDateToYMD_(r[0]);
+      if (!ymd) return;
+      const cas = String(r[1]).replace(/^'/, '').trim();
+      if (slotStartMs_(ymd, cas || '00:00') >= nowMs) nadchadzajuce++;
+      else done.push({ ymd: ymd, cas: cas, sluzba: r[4], email: String(r[5]).toLowerCase(), meno: r[3] });
+    });
+  }
+  const sheetArch = ss.getSheetByName(SHEET_ARCHIV);
+  if (sheetArch && sheetArch.getLastRow() > 1) {
+    sheetArch.getRange(2, 1, sheetArch.getLastRow() - 1, ARCHIV_HLAVICKA.length).getDisplayValues().forEach(function(r) {
+      const stav = String(r[7]);
+      if (stav === 'Prebehla') {
+        const ymd = slovakDateToYMD_(r[0]);
+        if (ymd) done.push({ ymd: ymd, cas: String(r[1]).replace(/^'/, '').trim(), sluzba: r[4], email: String(r[5]).toLowerCase(), meno: r[3] });
+      } else if (stav === 'Zrušil zákazník') zrusilZakaznik++;
+      else if (stav === 'Zrušil holič') zrusilHolic++;
+      else if (stav === ARCHIV_STAV_NEPOTVRDENA) nepotvrdene++;
+    });
+  }
+
+  const cena = function(s) { return CENY_SLUZIEB[s] || 0; };
+  const trzba = done.reduce(function(s, x) { return s + cena(x.sluzba); }, 0);
+  const zrusene = zrusilZakaznik + zrusilHolic;
+  let recenzie = { count: 0, average: 0 };
+  try { recenzie = getPublicReviews_(); } catch (err) {}
+
+  // týždne (Po-Ne), posledných 8
+  const dnesIso = getIsoDayOfWeek(dnesYmd);
+  const pondelok = shiftYmd_(dnesYmd, -(dnesIso - 1));
+  const tyzdne = [];
+  for (let k = 7; k >= 0; k--) {
+    const od = shiftYmd_(pondelok, -7 * k);
+    const doo = shiftYmd_(od, 6);
+    const n = done.filter(function(x) { return x.ymd >= od && x.ymd <= doo; });
+    tyzdne.push({ label: od.split('-').reverse().join('.'), n: n.length, trzba: n.reduce(function(s, x) { return s + cena(x.sluzba); }, 0) });
+  }
+  // mesiace, posledných 6
+  const mesiace = [];
+  const mesDnes = dnesYmd.slice(0, 7).split('-').map(Number);
+  for (let k = 5; k >= 0; k--) {
+    const d = new Date(Date.UTC(mesDnes[0], mesDnes[1] - 1 - k, 1));
+    const key = d.getUTCFullYear() + '-' + pad2_(d.getUTCMonth() + 1);
+    const n = done.filter(function(x) { return x.ymd.slice(0, 7) === key; });
+    mesiace.push({ label: pad2_(d.getUTCMonth() + 1) + '/' + d.getUTCFullYear(), n: n.length, trzba: n.reduce(function(s, x) { return s + cena(x.sluzba); }, 0) });
+  }
+  // služby
+  const sluzby = {};
+  done.forEach(function(x) { const k = x.sluzba || '(neznáma)'; sluzby[k] = (sluzby[k] || 0) + 1; });
+  // dni v týždni
+  const dni = [0, 0, 0, 0, 0, 0, 0];
+  done.forEach(function(x) { dni[getIsoDayOfWeek(x.ymd) - 1]++; });
+  // časy
+  const casy = {};
+  done.forEach(function(x) { if (x.cas) casy[x.cas] = (casy[x.cas] || 0) + 1; });
+  // stáli zákazníci
+  const zakaznici = {};
+  done.forEach(function(x) {
+    if (!x.email || x.email === ARCHIV_ANONYMIZOVANE.toLowerCase()) return;
+    const z = zakaznici[x.email] || (zakaznici[x.email] = { n: 0, meno: '', posl: '' });
+    z.n++;
+    if (x.ymd >= z.posl) { z.posl = x.ymd; z.meno = x.meno; }
+  });
+  const staly = Object.keys(zakaznici).map(function(k) { return zakaznici[k]; }).filter(function(z) { return z.n >= 2; })
+    .sort(function(a, b) { return b.n - a.n; }).slice(0, 5);
+
+  return { dnesYmd: dnesYmd, prebehlo: done.length, nadchadzajuce: nadchadzajuce, zrusilZakaznik: zrusilZakaznik, zrusilHolic: zrusilHolic,
+           nepotvrdene: nepotvrdene, zrusene: zrusene, trzba: trzba, recenzie: recenzie, tyzdne: tyzdne, mesiace: mesiace,
+           sluzby: sluzby, dni: dni, casy: casy, staly: staly };
+}
+
+function statsRows_(s) {
+  const rows = [];
+  const bold = [];
+  const nadpis = function(t) { rows.push([]); rows.push([t]); bold.push(rows.length); };
+  rows.push(['Štatistiky Barbar Shop']); bold.push(rows.length);
+  rows.push(['Prepočítané: ' + Utilities.formatDate(new Date(), 'Europe/Bratislava', 'd.M.yyyy HH:mm') + ' (hárok sa prepisuje automaticky, nič sem nepíš)']);
+
+  nadpis('Celkovo');
+  rows.push(['Ostrihaných bojovníkov', s.prebehlo]);
+  rows.push(['Nadchádzajúce rezervácie', s.nadchadzajuce]);
+  rows.push(['Odhad tržieb (Kč)', s.trzba]);
+  rows.push(['Zrušené zákazníkom', s.zrusilZakaznik]);
+  rows.push(['Zrušené holičom', s.zrusilHolic]);
+  const zakl = s.prebehlo + s.zrusene;
+  rows.push(['Podiel zrušení', zakl ? Math.round(s.zrusene / zakl * 100) + ' %' : '-']);
+  rows.push(['Nepotvrdené (vypršali alebo vymyslený e-mail)', s.nepotvrdene]);
+  rows.push(['Schválené recenzie', s.recenzie.count]);
+  rows.push(['Priemerné hodnotenie', s.recenzie.count ? s.recenzie.average + ' / 5' : '-']);
+
+  nadpis('Posledných 8 týždňov (začiatok týždňa)');
+  const maxT = Math.max.apply(null, s.tyzdne.map(function(t) { return t.n; }).concat([0]));
+  s.tyzdne.forEach(function(t) { rows.push([t.label, t.n, bar_(t.n, maxT), t.trzba + ' Kč']); });
+
+  nadpis('Posledných 6 mesiacov');
+  const maxM = Math.max.apply(null, s.mesiace.map(function(t) { return t.n; }).concat([0]));
+  s.mesiace.forEach(function(t) { rows.push([t.label, t.n, bar_(t.n, maxM), t.trzba + ' Kč']); });
+
+  nadpis('Podľa služby');
+  const sk = Object.keys(s.sluzby).sort(function(a, b) { return s.sluzby[b] - s.sluzby[a]; });
+  const maxS = sk.length ? s.sluzby[sk[0]] : 0;
+  sk.forEach(function(k) { rows.push([k, s.sluzby[k], bar_(s.sluzby[k], maxS), Math.round(s.sluzby[k] / s.prebehlo * 100) + ' %']); });
+
+  nadpis('Podľa dňa v týždni');
+  const nd = ['Pondelok', 'Utorok', 'Streda', 'Štvrtok', 'Piatok', 'Sobota', 'Nedeľa'];
+  const maxD = Math.max.apply(null, s.dni.concat([0]));
+  s.dni.forEach(function(n, i) { rows.push([nd[i], n, bar_(n, maxD)]); });
+
+  nadpis('Najobľúbenejšie časy');
+  const ck = Object.keys(s.casy).sort(function(a, b) { return s.casy[b] - s.casy[a]; }).slice(0, 8);
+  const maxC = ck.length ? s.casy[ck[0]] : 0;
+  ck.forEach(function(k) { rows.push([k, s.casy[k], bar_(s.casy[k], maxC)]); });
+
+  nadpis('Najvernejší bojovníci (2+ návštevy)');
+  if (!s.staly.length) rows.push(['zatiaľ nikto']);
+  s.staly.forEach(function(z) { rows.push([z.meno, z.n + 'x']); });
+  return { rows: rows, bold: bold };
+}
+
+function updateStats() {
+  const s = computeStats_();
+  const built = statsRows_(s);
+  const sirka = Math.max.apply(null, built.rows.map(function(r) { return r.length; }).concat([1]));
+  const data = built.rows.map(function(r) { const x = r.slice(); while (x.length < sirka) x.push(''); return x; });
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_STATISTIKY);
+  if (!sheet) sheet = ss.insertSheet(SHEET_STATISTIKY);
+  sheet.clear();
+  sheet.getRange(1, 1, data.length, sirka).setValues(data.map(function(r) { return r.map(function(v) { return typeof v === 'string' ? safeCell(v) : v; }); }));
+  built.bold.forEach(function(rowNo) { sheet.getRange(rowNo, 1).setFontWeight('bold'); });
+  try { sheet.setColumnWidth(1, 300); sheet.setColumnWidth(3, 190); } catch (err) {}
+  return s;
+}
+
+function updateStatsFromMenu() {
+  updateStats();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  try { ss.setActiveSheet(ss.getSheetByName(SHEET_STATISTIKY)); } catch (err) {}
+  try { ss.toast('Štatistiky sú prepočítané.', 'Štatistiky', 5); } catch (err) {}
 }
 
 // --- ARCHÍV REZERVÁCIÍ ---

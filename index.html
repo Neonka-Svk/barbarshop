@@ -44,7 +44,21 @@
 
     <main class="layout">
         <section class="booking-container" id="booking-section">
-            <h2>Objednaj sa na "údržbu"</h2>
+            <h2 id="booking-title">Objednaj sa na "údržbu"</h2>
+            <div class="reschedule-card" id="reschedule-card" hidden>
+                <p class="reschedule-label">Meníš tento termín:</p>
+                <p class="reschedule-old" id="reschedule-old"></p>
+                <p class="reschedule-hint" id="reschedule-hint"></p>
+                <a class="reschedule-leave" href="./">Nechcem meniť, späť na objednávku</a>
+            </div>
+            <div class="reschedule-done" id="reschedule-done" hidden>
+                <div class="reschedule-check">&#10003;</div>
+                <h3>Termín je zmenený</h3>
+                <p id="reschedule-new"></p>
+                <a id="reschedule-cal" class="pending-btn primary" target="_blank" rel="noopener" hidden>PRIDAŤ DO GOOGLE KALENDÁRA</a>
+                <a id="reschedule-ics" class="pending-btn ghost" target="_blank" rel="noopener" hidden>STIAHNUŤ DO KALENDÁRA (.ICS)</a>
+                <a class="reschedule-leave" href="./">Späť na hlavnú stránku</a>
+            </div>
             <form id="booking-form">
                 <div class="input-group">
                     <label for="name">Meno a priezvisko bojovníka: *</label>
@@ -71,7 +85,7 @@
                     </select>
                 </div>
                 
-                <div class="input-group">
+                <div class="input-group termin-group">
                     <label for="">Termín: *</label>
                     
                     <div id="termin-selector-empty" class="termin-box">
@@ -82,6 +96,7 @@
                         <span id="selected-termin-text" class="termin-text"></span>
                         <button type="button" id="btn-clear-termin" class="btn-clear">✖ ZRUŠIŤ</button>
                     </div>
+                    <button type="button" id="btn-nearest" class="btn-nearest" hidden></button>
                     <p class="note">Rezerváciu je možné vykonať min. 30 minút vopred!</p>
 
                     <input type="hidden" id="date" required>
@@ -94,6 +109,11 @@
         </section>
         
         <section class="booking-container timetable-section">
+            <div class="notice-bar" id="notice-bar" hidden role="region" aria-label="Oznamy">
+                <span class="notice-icon" aria-hidden="true">&#128226;</span>
+                <span class="notice-text" id="notice-text" aria-live="polite"></span>
+                <span class="notice-nav" id="notice-nav" hidden></span>
+            </div>
             <div class="calendar-header-row">
                 <h2 style="border:none; margin:0;">Výber termínu a obsadenosť</h2>
                 <div class="week-controls">
@@ -155,6 +175,10 @@
                 <button type="button" class="pending-btn ghost" id="pending-change-back">SPÄŤ</button>
             </form>
             <p class="pending-error" id="pending-error" role="alert"></p>
+            <div class="pending-links" id="pending-links" hidden>
+                <a id="pending-cal" class="pending-btn primary" target="_blank" rel="noopener">PRIDAŤ DO GOOGLE KALENDÁRA</a>
+                <a id="pending-ics" class="pending-btn ghost" target="_blank" rel="noopener">STIAHNUŤ DO KALENDÁRA (.ICS)</a>
+            </div>
             <div class="pending-actions" id="pending-actions">
                 <button type="button" class="pending-btn primary" id="pending-send-now">E-MAIL JE SPRÁVNY, POSLAŤ</button>
                 <button type="button" class="pending-btn ghost" id="pending-change-btn">ZMENIŤ E-MAIL</button>

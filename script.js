@@ -475,6 +475,9 @@ const isDesktopLayout = () => window.matchMedia('(min-width: 1000px)').matches;
 document.addEventListener('DOMContentLoaded', async () => {
     setupLightbox();
     setupPending();
+    setupNearest();
+    setupNotices();
+    initReschedule(); // ?zmena=<ID> z mailu: formulár sa prepne na výber nového termínu
     resumePending(); // rozpracovaná rezervácia z tejto karty (napr. po obnovení stránky pri prepnutí do mailu)
     await refreshData();
 
@@ -538,7 +541,9 @@ async function refreshDataSilently() {
         if (seq !== refreshSeq || !fresh || !Array.isArray(fresh.bookings)) return;
         const sig = (d) => JSON.stringify([d.bookings, d.custom, d.defaultHours]);
         const changed = sig(fresh) !== sig(globalData);
-        globalData = Object.assign({}, globalData, { bookings: fresh.bookings, custom: fresh.custom, defaultHours: fresh.defaultHours });
+        globalData = Object.assign({}, globalData, { bookings: fresh.bookings, custom: fresh.custom, defaultHours: fresh.defaultHours, notices: fresh.notices });
+        dataLoaded = true;
+        setNotices(fresh.notices); // oznamy sa prekreslia len keď sa zmenili
         if (changed) renderTimetableKeepingScroll();
         validateSelectedSlot();
     } catch (e) {
@@ -606,6 +611,8 @@ async function refreshData(opts) {
             const data = await response.json();
             if (seq !== refreshSeq) return; // medzitým prebehlo novšie načítanie
             globalData = data;
+            dataLoaded = true;
+            setNotices(globalData.notices);
             renderReviews(globalData.reviews);
             renderGallery(globalData.gallery);
         }
@@ -639,6 +646,7 @@ function updateUI() {
     document.getElementById('prevWeek').disabled = currentWeekOffset === 0;
     document.getElementById('nextWeek').disabled = currentWeekOffset === 4;
     renderTimetable();
+    updateNearestButton();
 }
 
 function renderTimetable() {
@@ -906,6 +914,8 @@ function updateTimeLine() {
 document.getElementById("booking-form").addEventListener("submit", async function(event) {
     event.preventDefault();
 
+    if (rescheduleMode) { submitReschedule(); return; } // zmena existujúcej rezervácie, nie nová objednávka
+
     const datum = document.getElementById("date").value;
     const cas = document.getElementById("time").value;
     const meno = document.getElementById("name").value;
@@ -1028,6 +1038,7 @@ function updateSelectedTerminUI() {
         emptyBox.style.display = 'block';
         filledBox.style.display = 'none';
     }
+    updateNearestButton();
 }
 
 // Bezpečná funkcia na získanie aktuálneho času v Bratislave
@@ -1110,7 +1121,7 @@ async function pendingApi(action, extra, userAction) {
 }
 
 function resetPendingState() {
-    Object.assign(ps, { state: null, email: '', changesLeft: 0, busy: false, polling: false, editing: false, minimized: false, sendFailures: 0, cancelArmedUntil: 0, lastPoll: 0 });
+    Object.assign(ps, { state: null, email: '', changesLeft: 0, busy: false, polling: false, editing: false, minimized: false, sendFailures: 0, cancelArmedUntil: 0, lastPoll: 0, cal: '', ics: '' });
     pEl('pending-error').textContent = '';
 }
 
@@ -1130,6 +1141,8 @@ function applyPendingState(s, seq) {
 
     if (s.state !== ps.state) pEl('pending-error').textContent = '';
     if (s.email) ps.email = s.email;
+    if (s.cal) ps.cal = s.cal;
+    if (s.ics) ps.ics = s.ics;
     if (typeof s.changesLeft === 'number') ps.changesLeft = s.changesLeft;
     if (s.holdMinutes) ps.holdMs = s.holdMinutes * 60000;
     if (s.state === 'waiting') {
@@ -1193,6 +1206,13 @@ function renderPending() {
     show('pending-progress', active && !ps.editing);
     show('pending-change', ps.editing);
     show('pending-actions', !ps.editing);
+    const calUrl = st === 'confirmed' ? safeHttpsUrl(ps.cal) : '';
+    const icsUrl = st === 'confirmed' ? safeHttpsUrl(ps.ics) : '';
+    show('pending-links', !!(calUrl || icsUrl));
+    show('pending-cal', !!calUrl);
+    show('pending-ics', !!icsUrl);
+    if (calUrl) pEl('pending-cal').href = calUrl;
+    if (icsUrl) pEl('pending-ics').href = icsUrl;
     show('pending-send-now', st === 'waiting');
     show('pending-change-btn', active && ps.changesLeft > 0);
     show('pending-cancel-btn', active);
@@ -1403,5 +1423,240 @@ async function resumePending() {
         showPendingPanel();
     } catch (e) {
         pending = null; // bez spojenia: uložený stav ostane, skúsi sa pri ďalšom načítaní
+    }
+}
+
+// --- NAJBLIŽŠÍ VOĽNÝ TERMÍN ---
+// Tlačidlo pod výberom termínu: najskorší voľný termín (aspoň 30 minút vopred) v rozsahu, ktorý ukazuje kalendár.
+// Ukáže sa až po načítaní dát (dovtedy by počítalo z prázdneho kalendára) a skryje sa, keď už je termín vybraný.
+let dataLoaded = false;
+const dniSk = ['nedeľa', 'pondelok', 'utorok', 'streda', 'štvrtok', 'piatok', 'sobota'];
+
+function findNearestSlot() {
+    const now = getCETime();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    for (let i = 0; i < 42; i++) {
+        const d = new Date(now);
+        d.setDate(d.getDate() + i);
+        const dStr = getLocalDateString(d);
+        const slots = getProcessedSlotsForDate(dStr)
+            .filter(s => !s.isContinuation && !s.isForceBooked && s.originalDate === dStr)
+            .sort((a, b) => casNaMinuty(a.originalTime) - casNaMinuty(b.originalTime));
+        for (const s of slots) {
+            if (i === 0 && casNaMinuty(s.originalTime) < nowMin + 30) continue;
+            return { date: dStr, time: s.originalTime, day: d };
+        }
+    }
+    return null;
+}
+
+function updateNearestButton() {
+    const btn = document.getElementById('btn-nearest');
+    if (!btn) return;
+    const selected = document.getElementById('date').value && document.getElementById('time').value;
+    const n = (dataLoaded && !selected) ? findNearestSlot() : null;
+    if (!n) { btn.hidden = true; return; }
+    btn.hidden = false;
+    btn.dataset.date = n.date;
+    btn.dataset.time = n.time;
+    btn.textContent = `⚡ Najbližší voľný: ${dniSk[n.day.getDay()]} ${n.day.getDate()}.${n.day.getMonth() + 1}. o ${n.time}`;
+}
+
+function setupNearest() {
+    const btn = document.getElementById('btn-nearest');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+        const date = btn.dataset.date, time = btn.dataset.time;
+        if (!date || !time) return;
+        document.getElementById('date').value = date;
+        document.getElementById('time').value = time;
+        // kalendár ukáže týždeň, v ktorom termín je
+        const monday = (x) => { const m = new Date(x); m.setHours(0, 0, 0, 0); m.setDate(m.getDate() - ((m.getDay() + 6) % 7)); return m; };
+        const [y, mo, da] = date.split('-').map(Number);
+        const offset = Math.round((monday(new Date(y, mo - 1, da)) - monday(new Date())) / (7 * 86400000));
+        currentWeekOffset = Math.max(0, Math.min(4, offset));
+        updateSelectedTerminUI();
+        updateUI();
+        refreshData({ silent: true }); // overí čerstvými dátami, či termín medzičasom nikto nezobral
+    });
+}
+
+// --- OZNAMY NAD KALENDÁROM ---
+// Viac oznamov sa strieda, čas na prečítanie sa predlžuje podľa dĺžky textu; kým je kurzor / prst na oznamoch,
+// alebo je karta na pozadí, neprepínajú sa. Ručne sa dá prepnúť bodkami.
+const notices = { items: [], index: 0, timer: null, hover: false, sig: '' };
+
+function setNotices(list) {
+    const items = (Array.isArray(list) ? list : []).map(n => (n && typeof n.text === 'string') ? n.text : '').filter(Boolean).slice(0, 5);
+    const sig = JSON.stringify(items);
+    if (sig === notices.sig) return; // bez zmeny sa nič neprekresľuje a striedanie nezačína odznova
+    notices.sig = sig;
+    notices.items = items;
+    notices.index = 0;
+    renderNotice();
+    scheduleNotice();
+}
+
+function renderNotice() {
+    const bar = document.getElementById('notice-bar');
+    if (!bar) return;
+    if (!notices.items.length) { bar.hidden = true; clearTimeout(notices.timer); return; }
+    bar.hidden = false;
+    const text = document.getElementById('notice-text');
+    text.textContent = notices.items[notices.index];
+    text.style.animation = 'none';
+    void text.offsetWidth; // znovu spustí jemné objavenie
+    text.style.animation = '';
+
+    const nav = document.getElementById('notice-nav');
+    nav.hidden = notices.items.length < 2;
+    nav.innerHTML = '';
+    if (notices.items.length > 1) {
+        notices.items.forEach((_, i) => {
+            const dot = document.createElement('button');
+            dot.type = 'button';
+            dot.className = 'notice-dot' + (i === notices.index ? ' active' : '');
+            dot.setAttribute('aria-label', `Oznam ${i + 1} z ${notices.items.length}`);
+            dot.addEventListener('click', () => showNotice(i));
+            nav.appendChild(dot);
+        });
+    }
+}
+
+function showNotice(i) {
+    const n = notices.items.length;
+    if (!n) return;
+    notices.index = ((i % n) + n) % n;
+    renderNotice();
+    scheduleNotice();
+}
+
+function scheduleNotice() {
+    clearTimeout(notices.timer);
+    if (notices.items.length < 2) return;
+    const ms = Math.min(25000, Math.max(8000, 3000 + notices.items[notices.index].length * 70));
+    notices.timer = setTimeout(() => {
+        if (notices.hover || document.hidden) { scheduleNotice(); return; }
+        showNotice(notices.index + 1);
+    }, ms);
+}
+
+function setupNotices() {
+    const bar = document.getElementById('notice-bar');
+    if (!bar) return;
+    bar.addEventListener('pointerenter', () => { notices.hover = true; });
+    bar.addEventListener('pointerleave', () => { notices.hover = false; scheduleNotice(); }); // po odchode dostane oznam celý čas znova
+    bar.addEventListener('focusin', () => { notices.hover = true; });
+    bar.addEventListener('focusout', () => { notices.hover = false; scheduleNotice(); });
+}
+
+// --- ZMENA TERMÍNU (odkaz z mailu: ?zmena=<ID rezervácie>) ---
+// Formulár sa zmení na výber nového termínu v kalendári. Zmenu overí server (voľný termín, otváracie hodiny,
+// najviac 2 zmeny), údaje o zákazníkovi z neho nikdy nechodia ani sa nevracajú.
+const RESCHEDULE_ID = (() => {
+    const v = new URLSearchParams(location.search).get('zmena');
+    return v && /^[0-9a-f-]{36}$/i.test(v) ? v : null;
+})();
+let rescheduleMode = null;
+
+function leaveReschedule() {
+    rescheduleMode = null;
+    const form = document.getElementById('booking-form');
+    form.classList.remove('reschedule-mode');
+    form.noValidate = false;
+    document.getElementById('reschedule-card').hidden = true;
+    document.getElementById('booking-title').textContent = 'Objednaj sa na "údržbu"';
+    document.querySelector('.btn-submit .btn-text').innerText = 'ODOSLAŤ OBJEDNÁVKU';
+    try { history.replaceState(null, '', location.pathname); } catch (e) { /* nevadí */ }
+}
+
+async function initReschedule() {
+    if (!RESCHEDULE_ID) return;
+    try {
+        const response = await fetch(`${SCRIPT_URL}?action=rescheduleInfo&id=${encodeURIComponent(RESCHEDULE_ID)}`);
+        const info = await response.json();
+        if (!info || !info.ok) {
+            showToast((info && info.error) || 'Túto rezerváciu sa nedá zmeniť.', 'error');
+            leaveReschedule();
+            return;
+        }
+        rescheduleMode = { id: RESCHEDULE_ID, datum: info.datum, cas: info.cas, sluzba: info.sluzba };
+        const form = document.getElementById('booking-form');
+        form.classList.add('reschedule-mode');
+        form.noValidate = true; // skryté povinné polia (meno, e-mail, služba) by inak zablokovali odoslanie
+        document.getElementById('booking-title').textContent = 'Zmeň si termín';
+        document.getElementById('reschedule-old').textContent = formatTermin(info.datum, info.cas, info.sluzba);
+        document.getElementById('reschedule-hint').textContent =
+            `Vyber nový termín v kalendári a potvrď zmenu. Zmeniť sa dá ešte ${info.zmenyZostava}x.`;
+        document.getElementById('reschedule-card').hidden = false;
+        document.querySelector('.btn-submit .btn-text').innerText = 'ZMENIŤ TERMÍN';
+    } catch (e) {
+        showToast('Nepodarilo sa načítať rezerváciu, skús to prosím znova.', 'error');
+        leaveReschedule();
+    }
+}
+
+function safeHttpsUrl(u) {
+    return typeof u === 'string' && /^https:\/\//.test(u) ? u : '';
+}
+
+async function submitReschedule() {
+    const datum = document.getElementById('date').value;
+    const cas = document.getElementById('time').value;
+    if (!datum || !cas) {
+        showToast('Najprv si vyber nový termín v kalendári!', 'error');
+        document.querySelector('.timetable-section').scrollIntoView({ behavior: 'smooth' });
+        return;
+    }
+    const btn = document.querySelector('.btn-submit');
+    const btnText = btn.querySelector('.btn-text');
+    const kalendar = document.querySelector('.timetable-container');
+    btn.classList.add('loading');
+    btnText.innerText = 'MENÍM TERMÍN...';
+    btn.disabled = true;
+    kalendar.style.pointerEvents = 'none';
+    try {
+        const response = await fetch(SCRIPT_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({ action: 'reschedule', id: rescheduleMode.id, datum, cas })
+        });
+        const result = await response.json();
+        if (result && result.status === 'ok') {
+            document.getElementById('date').value = '';
+            document.getElementById('time').value = '';
+            updateSelectedTerminUI();
+            const done = document.getElementById('reschedule-done');
+            document.getElementById('reschedule-new').textContent = formatTermin(result.datum, result.cas, result.sluzba);
+            const setLink = (id, url) => { const a = document.getElementById(id); const u = safeHttpsUrl(url); a.hidden = !u; if (u) a.href = u; };
+            setLink('reschedule-cal', result.cal);
+            setLink('reschedule-ics', result.ics);
+            document.getElementById('booking-form').hidden = true;
+            document.getElementById('reschedule-card').hidden = true;
+            document.getElementById('booking-title').textContent = 'Zmena termínu';
+            done.hidden = false;
+            rescheduleMode = null;
+            try { history.replaceState(null, '', location.pathname); } catch (e) { /* nevadí */ }
+            refreshData({ silent: true });
+            if (!isDesktopLayout()) done.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else {
+            const msg = (result && result.error) || 'Zmena sa nepodarila, skús to prosím znova.';
+            showToast(msg, 'error');
+            if (/termín/i.test(msg)) {
+                document.getElementById('date').value = '';
+                document.getElementById('time').value = '';
+                updateSelectedTerminUI();
+                renderTimetable();
+                refreshData({ silent: true });
+            }
+        }
+    } catch (e) {
+        console.error('Chyba pri zmene termínu', e);
+        showToast('Spojenie zlyhalo, skús to prosím znova.', 'error');
+    } finally {
+        btn.classList.remove('loading');
+        btnText.innerText = rescheduleMode ? 'ZMENIŤ TERMÍN' : 'ODOSLAŤ OBJEDNÁVKU';
+        kalendar.style.pointerEvents = 'all';
+        btn.disabled = false;
     }
 }

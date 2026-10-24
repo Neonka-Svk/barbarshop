@@ -1387,3 +1387,164 @@ select:invalid {
 select option {
     color: white;
 }
+
+/* --- NAJBLIŽŠÍ VOĽNÝ TERMÍN --- */
+.btn-nearest {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    margin-top: 8px;
+    padding: 10px 12px;
+    background: transparent;
+    border: 1px dashed var(--gold);
+    border-radius: 4px;
+    color: var(--gold);
+    font-weight: bold;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.btn-nearest:hover {
+    background: rgba(240, 196, 25, 0.12);
+}
+
+.btn-nearest[hidden] {
+    display: none;
+}
+
+/* --- OZNAMY NAD KALENDÁROM --- */
+.notice-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 14px 0;
+    padding: 10px 12px;
+    background: rgba(240, 196, 25, 0.12);
+    border: 1px solid var(--gold);
+    border-radius: 6px;
+}
+
+.notice-bar[hidden],
+.notice-nav[hidden] {
+    display: none;
+}
+
+.notice-icon {
+    flex: 0 0 auto;
+}
+
+.notice-text {
+    flex: 1;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+    animation: wide-fade-in 0.35s ease;
+}
+
+.notice-nav {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.notice-dot {
+    position: relative;
+    width: 10px;
+    height: 10px;
+    min-height: 0;
+    padding: 0;
+    border: 1px solid var(--gold);
+    border-radius: 50%;
+    background: transparent;
+    cursor: pointer;
+}
+
+.notice-dot::after {
+    content: '';
+    position: absolute;
+    inset: -9px;
+}
+
+.notice-dot.active {
+    background: var(--gold);
+}
+
+/* --- ZMENA TERMÍNU (odkaz z mailu: ?zmena=ID) --- */
+.reschedule-card,
+.reschedule-done {
+    margin-bottom: 18px;
+    padding: 14px;
+    border: 1px solid var(--gold);
+    border-radius: 6px;
+    background: rgba(240, 196, 25, 0.1);
+    text-align: center;
+}
+
+.reschedule-card[hidden],
+.reschedule-done[hidden],
+.pending-links[hidden],
+a.pending-btn[hidden] {
+    display: none;
+}
+
+.reschedule-label {
+    margin: 0 0 4px 0;
+    font-size: 0.85rem;
+    opacity: 0.8;
+}
+
+.reschedule-old {
+    margin: 0 0 8px 0;
+    color: var(--gold);
+    font-weight: bold;
+    font-size: 1.1rem;
+}
+
+.reschedule-hint {
+    margin: 0 0 10px 0;
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+.reschedule-leave {
+    display: inline-block;
+    margin-top: 10px;
+    color: var(--gold);
+    font-size: 0.85rem;
+}
+
+.reschedule-done h3 {
+    margin: 4px 0 8px 0;
+    color: var(--gold);
+}
+
+.reschedule-done .pending-btn {
+    margin-top: 8px;
+}
+
+.reschedule-check {
+    font-size: 44px;
+    color: #4caf50;
+    line-height: 1;
+}
+
+#booking-form.reschedule-mode .input-group:not(.termin-group),
+#booking-form.reschedule-mode .hp-field {
+    display: none;
+}
+
+a.pending-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    text-decoration: none;
+}
+
+.pending-links {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 18px;
+}

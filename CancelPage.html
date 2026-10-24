@@ -71,6 +71,8 @@
       transition: background-color 0.3s;
     }
     .btn:hover { background-color: #b71c1c; }
+    .alt { margin: 18px 0 0 0; font-size: 14px; }
+    .alt a { color: #f0c419; }
     <?!= busyCss ?>
   </style>
 </head>
@@ -92,6 +94,9 @@
       
       <button type="submit" class="btn" data-busy="RUŠÍM TERMÍN...">ÁNO, ZRUŠIŤ TERMÍN</button>
     </form>
+    <? if (typeof zmenaUrl !== 'undefined' && zmenaUrl) { ?>
+    <p class="alt">Chceš len iný čas? <a href="<?= zmenaUrl ?>" target="_top">Zmeniť termín</a></p>
+    <? } ?>
   </div>
   <script><?!= busyJs ?></script>
 </body>
