@@ -576,6 +576,18 @@ function validateSelectedSlot() {
     showToast('Tento termín si medzitým niekto zarezervoval. Vyber si prosím iný.', 'error');
 }
 
+// Zákryt kalendára s textom (načítanie, odosielanie rezervácie, zmena termínu). Počíta, koľko činností ho práve používa,
+// takže sa nezhasne, kým beží aspoň jedna z nich (napr. odoslanie a hneď po ňom obnovenie kalendára).
+let overlayUsers = 0;
+function calendarOverlay(on, text) {
+    const overlay = document.getElementById('loading-overlay');
+    if (!overlay) return;
+    overlayUsers = Math.max(0, overlayUsers + (on ? 1 : -1));
+    const label = overlay.querySelector('span');
+    if (on && text && label) label.textContent = text;
+    overlay.style.display = overlayUsers > 0 ? 'flex' : 'none';
+}
+
 async function refreshData(opts) {
     if (opts && opts.silent) return refreshDataSilently();
     const container = document.querySelector('.timetable-container');
@@ -590,7 +602,7 @@ async function refreshData(opts) {
         container.appendChild(overlay);
         container.style.overflow = "hidden";
     }
-    overlay.style.display = 'flex';
+    calendarOverlay(true, 'Aktualizujem bojové plány...');
 
     if (btnGoToCalendar) {
         btnGoToCalendar.disabled = true;
@@ -619,7 +631,7 @@ async function refreshData(opts) {
     } catch (e) {
         console.error('Chyba dát', e);
     } finally {
-        overlay.style.display = 'none';
+        calendarOverlay(false);
         container.style.overflow = "auto";
 
         if (btnGoToCalendar) {
@@ -949,9 +961,10 @@ document.getElementById("booking-form").addEventListener("submit", async functio
     
     // --- ZAPNUTIE SPINNERA ---
     btn.classList.add('loading');
-    btnText.innerText = "OBJEDNÁVAM...";
+    btnText.innerText = "REZERVUJEM...";
     btn.disabled = true;
     kalendar.style.pointerEvents = "none";
+    calendarOverlay(true, 'Rezervujem tvoj termín...');
 
     try {
         // Bez mode:'no-cors' - vďaka tomu vieme prečítať skutočnú odpoveď servera (napr. "termín je už
@@ -1010,9 +1023,10 @@ document.getElementById("booking-form").addEventListener("submit", async functio
     } finally {
         // --- VYPNUTIE SPINNERA ---
         btn.classList.remove('loading');
-        btnText.innerText = "ODOSLAŤ OBJEDNÁVKU";
+        btnText.innerText = "REZERVOVAŤ TERMÍN";
         kalendar.style.pointerEvents = "all";
         btn.disabled = false;
+        calendarOverlay(false);
     }
 });
 
@@ -1566,7 +1580,7 @@ function leaveReschedule() {
     form.noValidate = false;
     document.getElementById('reschedule-card').hidden = true;
     document.getElementById('booking-title').textContent = 'Objednaj sa na "údržbu"';
-    document.querySelector('.btn-submit .btn-text').innerText = 'ODOSLAŤ OBJEDNÁVKU';
+    document.querySelector('.btn-submit .btn-text').innerText = 'REZERVOVAŤ TERMÍN';
     try { history.replaceState(null, '', location.pathname); } catch (e) { /* nevadí */ }
 }
 
@@ -1615,6 +1629,7 @@ async function submitReschedule() {
     btnText.innerText = 'MENÍM TERMÍN...';
     btn.disabled = true;
     kalendar.style.pointerEvents = 'none';
+    calendarOverlay(true, 'Meníme tvoj termín...');
     try {
         const response = await fetch(SCRIPT_URL, {
             method: 'POST',
@@ -1655,8 +1670,9 @@ async function submitReschedule() {
         showToast('Spojenie zlyhalo, skús to prosím znova.', 'error');
     } finally {
         btn.classList.remove('loading');
-        btnText.innerText = rescheduleMode ? 'ZMENIŤ TERMÍN' : 'ODOSLAŤ OBJEDNÁVKU';
+        btnText.innerText = rescheduleMode ? 'ZMENIŤ TERMÍN' : 'REZERVOVAŤ TERMÍN';
         kalendar.style.pointerEvents = 'all';
         btn.disabled = false;
+        calendarOverlay(false);
     }
 }
