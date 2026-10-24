@@ -71,19 +71,38 @@
       transition: background-color 0.3s;
     }
     .btn:hover { background-color: #b71c1c; }
-    .alt { margin: 18px 0 0 0; font-size: 14px; }
-    .alt a { color: #f0c419; }
+    .btn-change {
+      display: block;
+      box-sizing: border-box;
+      width: 100%;
+      padding: 15px 25px;
+      background-color: #f0c419;
+      color: #1a1a1a;
+      font-size: 16px;
+      font-weight: bold;
+      text-decoration: none;
+      border-radius: 6px;
+      transition: background-color 0.3s;
+    }
+    .btn-change:hover { background-color: #d9b016; }
+    .or { margin: 18px 0 14px 0; font-size: 14px; color: #aaa; }
     <?!= busyCss ?>
   </style>
 </head>
 <body>
   <div class="card">
-    <h2>Naozaj chceš zrušiť termín?</h2>
+    <? const mozeZmenu = (typeof zmenaUrl !== 'undefined' && zmenaUrl); ?>
+    <h2><?= mozeZmenu ? 'Čo chceš s termínom?' : 'Naozaj chceš zrušiť termín?' ?></h2>
     
     <div class="details">
       <b>Bojovník:</b> <?= meno ?><br>
       <b>Dátum:</b> <?= datum ?> o <?= cas ?>
     </div>
+
+    <? if (mozeZmenu) { ?>
+    <a class="btn-change" href="<?= zmenaUrl ?>" target="_top">ZMENIŤ TERMÍN (vybrať iný čas)</a>
+    <p class="or">alebo termín zruš:</p>
+    <? } ?>
 
     <form method="GET" action="<?= scriptUrl ?>" target="_top">
       <input type="hidden" name="action" value="executeCancel">
@@ -94,9 +113,6 @@
       
       <button type="submit" class="btn" data-busy="RUŠÍM TERMÍN...">ÁNO, ZRUŠIŤ TERMÍN</button>
     </form>
-    <? if (typeof zmenaUrl !== 'undefined' && zmenaUrl) { ?>
-    <p class="alt">Chceš len iný čas? <a href="<?= zmenaUrl ?>" target="_top">Zmeniť termín</a></p>
-    <? } ?>
   </div>
   <script><?!= busyJs ?></script>
 </body>

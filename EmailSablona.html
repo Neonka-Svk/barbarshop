@@ -88,12 +88,14 @@
                                             <tr>
                                                 <td style="font-size: 18px; color: #1a1a1a; font-weight: bold;"><?= datum ?> o <?= cas ?></td>
                                             </tr>
+                                            <? if (!jeHolic) { ?>
                                             <tr>
                                                 <td style="font-size: 12px; text-transform: uppercase; color: #888888; font-weight: bold; padding-top: 15px; padding-bottom: 4px;">Kde</td>
                                             </tr>
                                             <tr>
                                                 <td style="font-size: 18px; color: #1a1a1a; font-weight: bold;"><?= MIESTO ?></td>
                                             </tr>
+                                            <? } ?>
                                         </table>
 
                                         <? if (jeHolic) { ?>
@@ -136,16 +138,14 @@
                                     <td align="center" style="padding: 25px;">
                                         <p style="margin: 0 0 15px 0; font-size: 14px; color: #666666;"><?= vyzvaText ?></p>
                                         
+                                        <? const kombi = (typeof zmenaUrl !== 'undefined' && zmenaUrl); ?>
                                         <table border="0" cellpadding="0" cellspacing="0">
                                             <tr>
-                                                <td align="center" bgcolor="#d32f2f" style="border-radius: 6px;">
-                                                    <a href="<?= cancelUrl ?>" target="_blank" style="font-size: 15px; font-family: Arial, sans-serif; color: #ffffff; text-decoration: none; border-radius: 6px; padding: 12px 24px; border: 1px solid #d32f2f; display: inline-block; font-weight: bold;">ZRUŠIŤ TERMÍN</a>
+                                                <td align="center" bgcolor="<?= kombi ? '#1a1a1a' : '#d32f2f' ?>" style="border-radius: 6px;">
+                                                    <a href="<?= cancelUrl ?>" target="_blank" style="font-size: 15px; font-family: Arial, sans-serif; color: <?= kombi ? '#f0c419' : '#ffffff' ?>; text-decoration: none; border-radius: 6px; padding: 12px 24px; border: 1px solid <?= kombi ? '#1a1a1a' : '#d32f2f' ?>; display: inline-block; font-weight: bold;"><?= kombi ? 'ZRUŠIŤ ALEBO ZMENIŤ TERMÍN' : 'ZRUŠIŤ TERMÍN' ?></a>
                                                 </td>
                                             </tr>
                                         </table>
-                                        <? if (typeof zmenaUrl !== 'undefined' && zmenaUrl) { ?>
-                                        <p style="margin: 16px 0 0 0; font-size: 13px;"><a href="<?= zmenaUrl ?>" target="_blank" style="color: #555555;">Radšej zmeniť termín</a></p>
-                                        <? } ?>
                                     </td>
                                 </tr>
                             </table>

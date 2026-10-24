@@ -43,6 +43,11 @@
     </header>
 
     <main class="layout">
+        <div class="notice-bar" id="notice-bar" hidden role="region" aria-label="Oznamy">
+            <span class="notice-icon" aria-hidden="true">&#128226;</span>
+            <span class="notice-text" id="notice-text" aria-live="polite"></span>
+            <span class="notice-nav" id="notice-nav" hidden></span>
+        </div>
         <section class="booking-container" id="booking-section">
             <h2 id="booking-title">Objednaj sa na "údržbu"</h2>
             <div class="reschedule-card" id="reschedule-card" hidden>
@@ -109,11 +114,6 @@
         </section>
         
         <section class="booking-container timetable-section">
-            <div class="notice-bar" id="notice-bar" hidden role="region" aria-label="Oznamy">
-                <span class="notice-icon" aria-hidden="true">&#128226;</span>
-                <span class="notice-text" id="notice-text" aria-live="polite"></span>
-                <span class="notice-nav" id="notice-nav" hidden></span>
-            </div>
             <div class="calendar-header-row">
                 <h2 style="border:none; margin:0;">Výber termínu a obsadenosť</h2>
                 <div class="week-controls">
@@ -172,7 +172,7 @@
                 <label for="pending-new-email">Správny e-mail:</label>
                 <input type="email" id="pending-new-email" autocomplete="email" maxlength="200">
                 <button type="submit" class="pending-btn primary" id="pending-change-save">ULOŽIŤ A POSLAŤ</button>
-                <button type="button" class="pending-btn ghost" id="pending-change-back">SPÄŤ</button>
+                <button type="button" class="pending-link" id="pending-change-back">Späť</button>
             </form>
             <p class="pending-error" id="pending-error" role="alert"></p>
             <div class="pending-links" id="pending-links" hidden>
@@ -181,9 +181,11 @@
             </div>
             <div class="pending-actions" id="pending-actions">
                 <button type="button" class="pending-btn primary" id="pending-send-now">E-MAIL JE SPRÁVNY, POSLAŤ</button>
-                <button type="button" class="pending-btn ghost" id="pending-change-btn">ZMENIŤ E-MAIL</button>
-                <button type="button" class="pending-btn danger" id="pending-cancel-btn">ZRUŠIŤ REZERVÁCIU</button>
                 <button type="button" class="pending-btn primary" id="pending-close-btn">ZAVRIEŤ</button>
+                <div class="pending-secondary">
+                    <button type="button" class="pending-link" id="pending-change-btn">Zmeniť e-mail</button>
+                    <button type="button" class="pending-link danger" id="pending-cancel-btn">Zrušiť rezerváciu</button>
+                </div>
             </div>
         </div>
     </div>

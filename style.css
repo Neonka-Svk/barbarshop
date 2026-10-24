@@ -1194,7 +1194,10 @@ footer a:hover {
 .pending-overlay[hidden],
 .pending-mini[hidden],
 .pending-change[hidden],
+.pending-actions[hidden],
 .pending-btn[hidden],
+.pending-link[hidden],
+.pending-secondary[hidden],
 .pending-progress[hidden] {
     display: none;
 }
@@ -1329,17 +1332,56 @@ footer a:hover {
     background: rgba(240, 196, 25, 0.12);
 }
 
-.pending-btn.danger {
-    background: transparent;
-    color: #ff8a80;
-    border-color: #ff8a80;
+/* vedľajšie akcie sú len textové odkazy, hlavné tlačidlo je vždy jedno */
+.pending-link {
+    background: none;
+    border: none;
+    padding: 8px 6px;
+    min-height: 36px;
+    color: var(--white);
+    font-size: 0.9rem;
+    font-weight: bold;
+    text-decoration: underline;
+    cursor: pointer;
+    opacity: 0.85;
 }
 
-.pending-btn.danger:hover,
-.pending-btn.danger.armed {
-    background: #d32f2f;
-    border-color: #d32f2f;
+.pending-link:hover {
+    opacity: 1;
+    color: var(--gold);
+}
+
+.pending-link.danger {
+    color: #ff8a80;
+}
+
+.pending-link.danger:hover,
+.pending-link.danger.armed {
     color: #fff;
+    opacity: 1;
+}
+
+.pending-link.danger.armed {
+    background: #d32f2f;
+    border-radius: 4px;
+    text-decoration: none;
+}
+
+.pending-link:disabled {
+    opacity: 0.4;
+    cursor: wait;
+}
+
+.pending-secondary {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+}
+
+.pending-change .pending-link {
+    display: block;
+    margin: 4px auto 0;
 }
 
 .pending-btn:disabled {
@@ -1547,4 +1589,21 @@ a.pending-btn {
     flex-direction: column;
     gap: 8px;
     margin-top: 18px;
+}
+
+/* oznamy sú nad oboma stĺpcami, aby nadpisy kalendára a formulára ostali v jednej rovine */
+main.layout > .notice-bar {
+    width: calc(100% - 20px);
+    max-width: 800px;
+    box-sizing: border-box;
+    margin: 14px 10px 0;
+}
+
+@media (min-width: 1000px) {
+    main.layout > .notice-bar {
+        grid-column: 1 / -1;
+        width: auto;
+        max-width: none;
+        margin: 0;
+    }
 }

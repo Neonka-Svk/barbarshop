@@ -1232,9 +1232,11 @@ function renderPending() {
     show('pending-cancel-btn', active);
     show('pending-close-btn', st !== 'waiting');
     pEl('pending-close-btn').textContent = st === 'sent' ? 'ZAVRIEŤ, POTVRDÍM V MAILI' : 'ZAVRIEŤ';
+    // po potvrdení je hlavná akcia kalendár, zatvorenie je len odkaz
+    pEl('pending-close-btn').className = st === 'confirmed' ? 'pending-link' : 'pending-btn primary';
 
     const armed = Date.now() < ps.cancelArmedUntil;
-    pEl('pending-cancel-btn').textContent = armed ? 'NAOZAJ ZRUŠIŤ?' : 'ZRUŠIŤ REZERVÁCIU';
+    pEl('pending-cancel-btn').textContent = armed ? 'Naozaj zrušiť?' : 'Zrušiť rezerváciu';
     pEl('pending-cancel-btn').classList.toggle('armed', armed);
     ['pending-send-now', 'pending-change-btn', 'pending-cancel-btn', 'pending-change-save', 'pending-change-back']
         .forEach(id => { pEl(id).disabled = ps.busy; });
@@ -1398,6 +1400,8 @@ function setupPending() {
         if (!s.error) ps.editing = false;
         ps.sendFailures = 0;
         applyPendingState(s, seq);
+        // "Uložiť a poslať" robí presne to, čo hovorí: nový e-mail sa uloží a mail odíde hneď (bez ďalšieho odpočtu)
+        if (!s.error && ps.state === 'waiting') sendPendingNow();
     });
 
     pEl('pending-cancel-btn').addEventListener('click', async () => {

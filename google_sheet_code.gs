@@ -789,7 +789,7 @@ function doGet(e) {
         template.zmenaUrl = rescheduleInfo_(id).ok ? rescheduleUrl_(id) : '';
       }
       template.viewUrl = "#"; 
-      template.vyzvaText = "Ak chceš tento termín zrušiť, klikni na tlačidlo nižšie:";
+      template.vyzvaText = (template.zmenaUrl ? "Potrebuješ iný čas alebo chceš termín zrušiť? Klikni na tlačidlo nižšie:" : "Ak chceš tento termín zrušiť, klikni na tlačidlo nižšie:");
       
       return template.evaluate()
         .setTitle("Rezervácia Barbar Shop")
@@ -2646,7 +2646,7 @@ function sendRescheduleCustomerMail_(f, id, ymd, cas, datumSk, zostava) {
   sablona.calUrl = googleCalendarUrl_(ymd, cas, f.sluzba, id);
   sablona.icsUrl = icsUrl_(id);
   sablona.zmenaUrl = zostava > 0 ? rescheduleUrl_(id) : '';
-  sablona.vyzvaText = 'Ak chceš termín zrušiť, klikni na tlačidlo nižšie:';
+  sablona.vyzvaText = zostava > 0 ? 'Potrebuješ iný čas alebo chceš termín zrušiť? Klikni na tlačidlo nižšie:' : 'Ak chceš termín zrušiť, klikni na tlačidlo nižšie:';
   sablona.jeHolic = false;
   MailApp.sendEmail({ name: MAIL_NAZOV, to: f.email, subject: 'Barbar Shop - Termín zmenený (' + datumSk + ' o ' + cas + ')', htmlBody: sablona.evaluate().getContent() });
 }
@@ -2685,11 +2685,19 @@ function getNoticeSheet_() {
     sheet = ss.insertSheet(SHEET_OZNAMY);
     sheet.getRange(1, 1, 1, OZNAMY_HLAVICKA.length).setValues([OZNAMY_HLAVICKA]).setFontWeight('bold');
     sheet.appendRow(['Príklad: Tento týždeň nestriham, od pondelka zase áno. (Zaškrtni Zobraziť, aby sa ukázal na webe.)', '', '', false]);
-    sheet.getRange(2, 4).insertCheckboxes();
     sheet.setFrozenRows(1);
     try { ss.setActiveSheet(povodny); } catch (err) {}
   }
+  upgradeNoticeSheet_(sheet);
   return sheet;
+}
+
+// Políčka Zobraziť sú pripravené v celom stĺpci (riadky 2 až OZNAMY_RIADKOV_S_POLICKOM), aby sa nový oznam dal zapnúť
+// rovnako ako ostatné. Existujúce hodnoty ostávajú, prázdne bunky sa len zobrazia ako nezaškrtnuté.
+const OZNAMY_RIADKOV_S_POLICKOM = 100;
+function upgradeNoticeSheet_(sheet) {
+  const rng = sheet.getRange(2, 4, OZNAMY_RIADKOV_S_POLICKOM - 1, 1);
+  rng.setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
 }
 
 // 'yyyy-MM-dd', '' (prázdne) alebo null (nečitateľné).
@@ -2713,7 +2721,8 @@ function getPublicNotices_() {
   const out = [];
   rows.forEach(function(r, i) {
     const text = String(r[0] == null ? '' : r[0]).trim();
-    if (!text || r[3] === false) return;
+    // Oznam sa ukáže len so zaškrtnutým políčkom Zobraziť (aj text TRUE, keby ho niekto vložil ako text)
+    if (!text || !(r[3] === true || String(r[3]).toUpperCase() === 'TRUE')) return;
     const od = parseNoticeDate_(r[1]);
     const doo = parseNoticeDate_(r[2]);
     if (od === null || doo === null) {
@@ -2785,7 +2794,7 @@ function computeStats_() {
     const od = shiftYmd_(pondelok, -7 * k);
     const doo = shiftYmd_(od, 6);
     const n = done.filter(function(x) { return x.ymd >= od && x.ymd <= doo; });
-    tyzdne.push({ label: od.split('-').reverse().join('.'), n: n.length, trzba: n.reduce(function(s, x) { return s + cena(x.sluzba); }, 0) });
+    tyzdne.push({ od: od, doo: doo, n: n.length, trzba: n.reduce(function(s, x) { return s + cena(x.sluzba); }, 0) });
   }
   // mesiace, posledných 6
   const mesiace = [];
@@ -2794,7 +2803,7 @@ function computeStats_() {
     const d = new Date(Date.UTC(mesDnes[0], mesDnes[1] - 1 - k, 1));
     const key = d.getUTCFullYear() + '-' + pad2_(d.getUTCMonth() + 1);
     const n = done.filter(function(x) { return x.ymd.slice(0, 7) === key; });
-    mesiace.push({ label: pad2_(d.getUTCMonth() + 1) + '/' + d.getUTCFullYear(), n: n.length, trzba: n.reduce(function(s, x) { return s + cena(x.sluzba); }, 0) });
+    mesiace.push({ label: MESIACE_SK[d.getUTCMonth()] + ' ' + d.getUTCFullYear(), n: n.length, trzba: n.reduce(function(s, x) { return s + cena(x.sluzba); }, 0) });
   }
   // služby
   const sluzby = {};
@@ -2821,66 +2830,140 @@ function computeStats_() {
            sluzby: sluzby, dni: dni, casy: casy, staly: staly };
 }
 
-function statsRows_(s) {
-  const rows = [];
-  const bold = [];
-  const nadpis = function(t) { rows.push([]); rows.push([t]); bold.push(rows.length); };
-  rows.push(['Štatistiky Barbar Shop']); bold.push(rows.length);
-  rows.push(['Prepočítané: ' + Utilities.formatDate(new Date(), 'Europe/Bratislava', 'd.M.yyyy HH:mm') + ' (hárok sa prepisuje automaticky, nič sem nepíš)']);
+const STAT_FARBY = { zlata: '#f0c419', tmava: '#2b1d16', krem: '#fff8e1', pasik: '#faf6ea', hlavicka: '#efe6c8', sedá: '#7a7a7a', graf: '#c99700' };
+const MESIACE_SK = ['jan', 'feb', 'mar', 'apr', 'máj', 'jún', 'júl', 'aug', 'sep', 'okt', 'nov', 'dec'];
 
-  nadpis('Celkovo');
-  rows.push(['Ostrihaných bojovníkov', s.prebehlo]);
-  rows.push(['Nadchádzajúce rezervácie', s.nadchadzajuce]);
-  rows.push(['Odhad tržieb (Kč)', s.trzba]);
-  rows.push(['Zrušené zákazníkom', s.zrusilZakaznik]);
-  rows.push(['Zrušené holičom', s.zrusilHolic]);
+function dmLabel_(ymd) { return Number(ymd.slice(8)) + '.' + Number(ymd.slice(5, 7)) + '.'; }
+
+// Zapíše jednu sekciu (nadpis, hlavička stĺpcov, riadky) od riadku `row` a vráti číslo prvého riadku s dátami.
+// Tabuľky majú 4 stĺpce: popis | číslo | stĺpcový "graf" | doplnok. Popisy sa zapisujú ako text (dátumy a časy by
+// Sheets inak premenili na dátumy a pokazili by grafy).
+function statsBlock_(sheet, row, title, headers, data) {
+  const F = STAT_FARBY;
+  sheet.getRange(row, 1, 1, 4).setBackground(F.zlata).setFontColor(F.tmava).setFontWeight('bold').setFontSize(11);
+  sheet.getRange(row, 1).setValue(title);
+  sheet.setRowHeight(row, 26);
+  sheet.getRange(row, 1, 1, 4).setVerticalAlignment('middle');
+  const h = sheet.getRange(row + 1, 1, 1, 4);
+  h.setValues([headers]).setBackground(F.hlavicka).setFontColor(F.sedá).setFontWeight('bold').setFontSize(9);
+  const first = row + 2;
+  if (data.length) {
+    sheet.getRange(first, 1, data.length, 1).setNumberFormat('@');
+    sheet.getRange(first, 1, data.length, 4).setValues(data.map(function(r) { return r.map(function(v) { return typeof v === 'string' ? safeCell(v) : v; }); }));
+    sheet.getRange(first, 2, data.length, 1).setHorizontalAlignment('center').setFontWeight('bold');
+    sheet.getRange(first, 3, data.length, 1).setFontColor(F.graf).setFontSize(10);
+    sheet.getRange(first, 4, data.length, 1).setHorizontalAlignment('right').setFontColor(F.sedá);
+    for (let i = 1; i < data.length; i += 2) sheet.getRange(first + i, 1, 1, 4).setBackground(F.pasik);
+  }
+  return first;
+}
+
+function buildStatsSheet_(sheet, s) {
+  const F = STAT_FARBY;
+  try { sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).breakApart(); } catch (err) {}
+  sheet.clear();
+  try { sheet.getCharts().forEach(function(ch) { sheet.removeChart(ch); }); } catch (err) {}
+  try { sheet.setHiddenGridlines(true); sheet.setTabColor(F.zlata); } catch (err) {}
+  if (sheet.getMaxRows() < 120) sheet.insertRowsAfter(sheet.getMaxRows(), 120 - sheet.getMaxRows());
+  if (sheet.getMaxColumns() < 12) sheet.insertColumnsAfter(sheet.getMaxColumns(), 12 - sheet.getMaxColumns());
+  sheet.getRange(1, 1, 120, 4).setFontFamily('Arial').setVerticalAlignment('middle');
+  sheet.setColumnWidth(1, 200); sheet.setColumnWidth(2, 115); sheet.setColumnWidth(3, 215); sheet.setColumnWidth(4, 115);
+
+  // titulok
+  sheet.getRange(1, 1, 1, 4).merge().setBackground(F.tmava).setFontColor(F.zlata).setFontSize(18).setFontWeight('bold').setVerticalAlignment('middle');
+  sheet.getRange(1, 1).setValue('BARBAR SHOP  ·  štatistiky');
+  sheet.setRowHeight(1, 46);
+  sheet.getRange(2, 1, 1, 4).merge().setFontSize(9).setFontColor(F.sedá).setFontStyle('italic');
+  sheet.getRange(2, 1).setValue('Prepočítané ' + Utilities.formatDate(new Date(), 'Europe/Bratislava', 'd.M.yyyy HH:mm') + '. Hárok sa prepisuje sám, nič doň nepíš.');
+
+  // dlaždice
+  const priemerTrzba = s.prebehlo ? Math.round(s.trzba / s.prebehlo) : 0;
   const zakl = s.prebehlo + s.zrusene;
-  rows.push(['Podiel zrušení', zakl ? Math.round(s.zrusene / zakl * 100) + ' %' : '-']);
-  rows.push(['Nepotvrdené (vypršali alebo vymyslený e-mail)', s.nepotvrdene]);
-  rows.push(['Schválené recenzie', s.recenzie.count]);
-  rows.push(['Priemerné hodnotenie', s.recenzie.count ? s.recenzie.average + ' / 5' : '-']);
+  sheet.getRange(4, 1, 1, 4).setValues([['Ostrihaní bojovníci', 'Odhad tržieb', 'Podiel zrušení', 'Hodnotenie']]);
+  sheet.getRange(5, 1, 1, 4).setValues([[s.prebehlo, s.trzba, zakl ? s.zrusene / zakl : 0, s.recenzie.count ? s.recenzie.average : '-']]);
+  sheet.getRange(6, 1, 1, 4).setValues([[
+    'nadchádzajúce: ' + s.nadchadzajuce,
+    'v priemere ' + priemerTrzba + ' Kč na strih',
+    'zákazník ' + s.zrusilZakaznik + ', holič ' + s.zrusilHolic,
+    s.recenzie.count + (s.recenzie.count === 1 ? ' recenzia' : ' recenzií')
+  ]]);
+  const tiles = sheet.getRange(4, 1, 3, 4);
+  tiles.setBackground(F.krem).setHorizontalAlignment('center');
+  sheet.getRange(4, 1, 1, 4).setFontSize(9).setFontColor(F.sedá).setFontWeight('bold');
+  sheet.getRange(5, 1, 1, 4).setFontSize(20).setFontWeight('bold').setFontColor(F.tmava);
+  sheet.getRange(6, 1, 1, 4).setFontSize(9).setFontColor(F.sedá);
+  sheet.getRange(5, 1).setNumberFormat('0');
+  sheet.getRange(5, 2).setNumberFormat('#,##0 \"Kč\"');
+  sheet.getRange(5, 3).setNumberFormat('0%');
+  sheet.getRange(5, 4).setNumberFormat('0.0 \"/ 5\"');
+  sheet.setRowHeight(5, 40);
+  try { tiles.setBorder(null, null, true, null, true, null, '#ffffff', SpreadsheetApp.BorderStyle.SOLID_THICK); } catch (err) {}
+  sheet.getRange(7, 1, 1, 4).merge().setFontSize(9).setFontColor(F.sedá);
+  sheet.getRange(7, 1).setValue('Nepotvrdené rezervácie (vypršali alebo vymyslený e-mail): ' + s.nepotvrdene);
 
-  nadpis('Posledných 8 týždňov (začiatok týždňa)');
+  // sekcie
+  let row = 9;
   const maxT = Math.max.apply(null, s.tyzdne.map(function(t) { return t.n; }).concat([0]));
-  s.tyzdne.forEach(function(t) { rows.push([t.label, t.n, bar_(t.n, maxT), t.trzba + ' Kč']); });
+  const tyzdneStart = statsBlock_(sheet, row, 'Posledných 8 týždňov', ['Týždeň', 'Strihy', '', 'Tržby'],
+    s.tyzdne.map(function(t) { return [dmLabel_(t.od) + ' - ' + dmLabel_(t.doo), t.n, bar_(t.n, maxT), t.trzba]; }));
+  sheet.getRange(tyzdneStart, 4, s.tyzdne.length, 1).setNumberFormat('#,##0 \"Kč\"');
+  row = tyzdneStart + s.tyzdne.length + 1;
 
-  nadpis('Posledných 6 mesiacov');
   const maxM = Math.max.apply(null, s.mesiace.map(function(t) { return t.n; }).concat([0]));
-  s.mesiace.forEach(function(t) { rows.push([t.label, t.n, bar_(t.n, maxM), t.trzba + ' Kč']); });
+  const mesiaceStart = statsBlock_(sheet, row, 'Posledných 6 mesiacov', ['Mesiac', 'Strihy', '', 'Tržby'],
+    s.mesiace.map(function(t) { return [t.label, t.n, bar_(t.n, maxM), t.trzba]; }));
+  sheet.getRange(mesiaceStart, 4, s.mesiace.length, 1).setNumberFormat('#,##0 \"Kč\"');
+  row = mesiaceStart + s.mesiace.length + 1;
 
-  nadpis('Podľa služby');
   const sk = Object.keys(s.sluzby).sort(function(a, b) { return s.sluzby[b] - s.sluzby[a]; });
   const maxS = sk.length ? s.sluzby[sk[0]] : 0;
-  sk.forEach(function(k) { rows.push([k, s.sluzby[k], bar_(s.sluzby[k], maxS), Math.round(s.sluzby[k] / s.prebehlo * 100) + ' %']); });
+  const sluzbyStart = statsBlock_(sheet, row, 'Podľa služby', ['Služba', 'Strihy', '', 'Podiel'],
+    sk.length ? sk.map(function(k) { return [k, s.sluzby[k], bar_(s.sluzby[k], maxS), s.prebehlo ? s.sluzby[k] / s.prebehlo : 0]; }) : [['zatiaľ nič', 0, '', 0]]);
+  sheet.getRange(sluzbyStart, 4, Math.max(sk.length, 1), 1).setNumberFormat('0%');
+  row = sluzbyStart + Math.max(sk.length, 1) + 1;
 
-  nadpis('Podľa dňa v týždni');
   const nd = ['Pondelok', 'Utorok', 'Streda', 'Štvrtok', 'Piatok', 'Sobota', 'Nedeľa'];
   const maxD = Math.max.apply(null, s.dni.concat([0]));
-  s.dni.forEach(function(n, i) { rows.push([nd[i], n, bar_(n, maxD)]); });
+  const dniStart = statsBlock_(sheet, row, 'Podľa dňa v týždni', ['Deň', 'Strihy', '', ''], s.dni.map(function(n, i) { return [nd[i], n, bar_(n, maxD), '']; }));
+  row = dniStart + 7 + 1;
 
-  nadpis('Najobľúbenejšie časy');
   const ck = Object.keys(s.casy).sort(function(a, b) { return s.casy[b] - s.casy[a]; }).slice(0, 8);
   const maxC = ck.length ? s.casy[ck[0]] : 0;
-  ck.forEach(function(k) { rows.push([k, s.casy[k], bar_(s.casy[k], maxC)]); });
+  const casyStart = statsBlock_(sheet, row, 'Najobľúbenejšie časy', ['Čas', 'Strihy', '', ''],
+    ck.length ? ck.map(function(k) { return [k, s.casy[k], bar_(s.casy[k], maxC), '']; }) : [['zatiaľ nič', 0, '', '']]);
+  row = casyStart + Math.max(ck.length, 1) + 1;
 
-  nadpis('Najvernejší bojovníci (2+ návštevy)');
-  if (!s.staly.length) rows.push(['zatiaľ nikto']);
-  s.staly.forEach(function(z) { rows.push([z.meno, z.n + 'x']); });
-  return { rows: rows, bold: bold };
+  statsBlock_(sheet, row, 'Najvernejší bojovníci (2+ návštevy)', ['Meno', 'Návštev', '', ''],
+    s.staly.length ? s.staly.map(function(z) { return [z.meno, z.n, '', '']; }) : [['zatiaľ nikto', '', '', '']]);
+
+  // grafy vpravo (ak zlyhajú, tabuľky ostanú)
+  try {
+    const graf = function(typ, titul, rowStart, pocet, kde, farby) {
+      const b = sheet.newChart().setChartType(typ)
+        .addRange(sheet.getRange(rowStart, 1, pocet, 2))
+        .setNumHeaders(0)
+        .setPosition(kde, 6, 0, 0)
+        .setOption('title', titul)
+        .setOption('legend', { position: typ === Charts.ChartType.PIE ? 'right' : 'none' })
+        .setOption('colors', farby)
+        .setOption('width', 460).setOption('height', 220);
+      sheet.insertChart(b.build());
+    };
+    graf(Charts.ChartType.COLUMN, 'Strihy po týždňoch', tyzdneStart, s.tyzdne.length, 4, [F.zlata]);
+    graf(Charts.ChartType.COLUMN, 'Strihy po mesiacoch', mesiaceStart, s.mesiace.length, 16, [F.zlata]);
+    if (sk.length) graf(Charts.ChartType.PIE, 'Služby', sluzbyStart, sk.length, 28, [F.zlata, '#9b1515', F.tmava]);
+    graf(Charts.ChartType.COLUMN, 'Dni v týždni', dniStart, 7, 40, [F.zlata]);
+  } catch (err) {
+    console.error('Grafy v štatistikách sa nepodarilo vytvoriť (tabuľky ostávajú):', err);
+  }
 }
 
 function updateStats() {
   const s = computeStats_();
-  const built = statsRows_(s);
-  const sirka = Math.max.apply(null, built.rows.map(function(r) { return r.length; }).concat([1]));
-  const data = built.rows.map(function(r) { const x = r.slice(); while (x.length < sirka) x.push(''); return x; });
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(SHEET_STATISTIKY);
   if (!sheet) sheet = ss.insertSheet(SHEET_STATISTIKY);
-  sheet.clear();
-  sheet.getRange(1, 1, data.length, sirka).setValues(data.map(function(r) { return r.map(function(v) { return typeof v === 'string' ? safeCell(v) : v; }); }));
-  built.bold.forEach(function(rowNo) { sheet.getRange(rowNo, 1).setFontWeight('bold'); });
-  try { sheet.setColumnWidth(1, 300); sheet.setColumnWidth(3, 190); } catch (err) {}
+  buildStatsSheet_(sheet, s);
   return s;
 }
 
