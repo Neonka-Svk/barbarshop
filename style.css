@@ -1421,13 +1421,42 @@ footer a:hover {
     cursor: pointer;
 }
 
-/* výber služby: kým nie je nič zvolené, text vyzerá ako placeholder */
+/* --- ROZBAĽOVAČ SLUŽBY --- */
+/* appearance: none (vyššie) schová aj systémovú šípku, preto vlastná zlatá (SVG v pozadí) */
+select {
+    cursor: pointer;
+    padding-right: 44px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23f0c419' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+    background-size: 18px;
+    color-scheme: dark; /* zoznam možností sa vykreslí tmavo, takže zvýraznená položka nemá biely text na svetlosivom */
+}
+
+select:focus {
+    outline: none;
+    border-color: var(--gold);
+}
+
+/* kým nie je nič zvolené, text vyzerá ako placeholder */
 select:invalid {
     color: #999;
 }
 
+/* možnosti v zozname: tmavé pozadie, biely text; označená a prejdená myšou zlatá s tmavým textom */
 select option {
-    color: white;
+    background-color: #2b1d16;
+    color: #fff;
+}
+
+select option:checked,
+select option:hover {
+    background-color: var(--gold);
+    color: var(--dark);
+}
+
+select option:disabled {
+    color: #999;
 }
 
 /* --- NAJBLIŽŠÍ VOĽNÝ TERMÍN --- */

@@ -6,6 +6,9 @@ const PROD_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw65KS-ksdoc0ep
 // Lokálne testovanie proti testovacej kópii tabuľky: http://localhost:8124/?api=<URL testovacieho nasadenia>
 // (adresa sa zapamätá, ?api=prod vráti ostrú). Funguje LEN na localhoste, na ostrom webe sa dá zmeniť jedine tu v kóde,
 // inak by stačil podstrčený odkaz s ?api= a objednávky by odchádzali na cudzí server.
+// Verejný kľúč Cloudflare Turnstile (nie je tajný). Prázdny = overenie vypnuté. Návod je v odpovedi / README.
+const TURNSTILE_SITEKEY = '';
+
 const SCRIPT_URL = (() => {
     if (!['localhost', '127.0.0.1'].includes(location.hostname)) return PROD_SCRIPT_URL;
     try {
@@ -475,6 +478,7 @@ const isDesktopLayout = () => window.matchMedia('(min-width: 1000px)').matches;
 document.addEventListener('DOMContentLoaded', async () => {
     setupLightbox();
     setupPending();
+    setupTurnstile();
     setupNearest();
     setupNotices();
     initReschedule(); // ?zmena=<ID> z mailu: formulár sa prepne na výber nového termínu
@@ -955,6 +959,12 @@ document.getElementById("booking-form").addEventListener("submit", async functio
         return;
     }
 
+    // Turnstile: kým je zapnutý, treba mať žetón (neviditeľné overenie trvá zlomok sekundy)
+    if (TURNSTILE_SITEKEY && !turnstileToken && !turnstileFailed) {
+        showToast('Ešte overujem, že nie si robot. Ak sa nad tlačidlom zobrazilo overenie, dokonči ho, inak skús o chvíľu znova.', 'error');
+        return;
+    }
+
     const btn = document.querySelector('.btn-submit');
     const btnText = btn.querySelector('.btn-text'); // Chytíme textovú časť tlačidla
     const kalendar = document.querySelector('.timetable-container');
@@ -972,7 +982,7 @@ document.getElementById("booking-form").addEventListener("submit", async functio
         const response = await fetch(SCRIPT_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain' },
-            body: JSON.stringify({ meno, email, sluzba, datum, cas, website })
+            body: JSON.stringify({ meno, email, sluzba, datum, cas, website, ts: turnstileToken })
         });
 
         let result = null;
@@ -1027,6 +1037,7 @@ document.getElementById("booking-form").addEventListener("submit", async functio
         kalendar.style.pointerEvents = "all";
         btn.disabled = false;
         calendarOverlay(false);
+        resetTurnstile(); // žetón je jednorazový
     }
 });
 
@@ -1678,5 +1689,44 @@ async function submitReschedule() {
         kalendar.style.pointerEvents = 'all';
         btn.disabled = false;
         calendarOverlay(false);
+    }
+}
+
+// --- OCHRANA FORMULÁRA: Cloudflare Turnstile (voliteľné) ---
+// Zapne sa vyplnením TURNSTILE_SITEKEY hore (verejný kľúč z Cloudflare) a nastavením TURNSTILE_SECRET v Apps Scripte
+// (Vlastnosti skriptu). Kým je kľúč prázdny, nič sa nenačíta a formulár funguje ako doteraz. Widget je neviditeľný
+// (zobrazí sa len keď Cloudflare potrebuje od človeka niečo overiť). Žetón platí na jedno odoslanie, preto sa po
+// každom pokuse obnovuje.
+let turnstileToken = '';
+let turnstileWidget = null;
+let turnstileFailed = false;
+
+function setupTurnstile() {
+    if (!TURNSTILE_SITEKEY) return;
+    const s = document.createElement('script');
+    s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+    s.async = true;
+    s.defer = true;
+    s.onload = () => {
+        try {
+            turnstileWidget = window.turnstile.render('#turnstile-box', {
+                sitekey: TURNSTILE_SITEKEY,
+                appearance: 'interaction-only',
+                callback: (token) => { turnstileToken = token; },
+                'expired-callback': () => { turnstileToken = ''; },
+                'error-callback': () => { turnstileToken = ''; turnstileFailed = true; }
+            });
+        } catch (e) {
+            turnstileFailed = true;
+        }
+    };
+    s.onerror = () => { turnstileFailed = true; }; // napr. blokátor reklám: server rozhodne, či objednávku prijme
+    document.head.appendChild(s);
+}
+
+function resetTurnstile() {
+    turnstileToken = '';
+    if (turnstileWidget !== null && window.turnstile) {
+        try { window.turnstile.reset(turnstileWidget); } catch (e) { /* nevadí */ }
     }
 }

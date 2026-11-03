@@ -141,6 +141,112 @@ function checkRateLimit(email) {
   return true;
 }
 
+
+// ===================== OCHRANA PRED ZNEUŽITÍM =====================
+// Adresa Apps Scriptu je verejná (je v script.js), takže ju môže niekto volať aj skriptom. Hrozilo by:
+// (1) posielanie potvrdení na cudziu adresu, (2) vyčerpanie dennej kvóty mailov, (3) držanie termínov bez potvrdenia.
+// Obrana: limity na jednu adresu (aj pri zmene e-mailu), najviac EMAIL_MAX_NEPOTVRDENYCH čakajúcich rezervácií na adresu,
+// zastavenie nových objednávok, keď sa míňa kvóta mailov (potvrdenia pre už čakajúce rezervácie ostanú), a voliteľne
+// Cloudflare Turnstile (zapne sa až po nastavení TURNSTILE_SECRET v Vlastnostiach skriptu a TURNSTILE_SITEKEY v script.js).
+// Zámerne NIE je celkový limit "objednávok za hodinu": útočník by ním vedel zablokovať aj skutočných zákazníkov.
+const EMAIL_LIMIT_HODINA = 3;          // najviac potvrdení na jednu adresu za hodinu
+const EMAIL_LIMIT_6_HODIN = 6;         // a za 6 hodín (dlhšie okno cache nedovolí)
+const EMAIL_MAX_NEPOTVRDENYCH = 2;     // najviac čakajúcich rezervácií naraz na jednu adresu
+const KVOTA_MIN_NOVE_OBJEDNAVKY = 5;   // pod touto kvótou sa nové objednávky neprijímajú (rezerva pre už čakajúce)
+const KONTAKT_EMAIL = 'roman.barbarshop@gmail.com'; // verejný kontakt pre zákazníkov (je aj v zásadách ochrany údajov)
+const ZRUSENIE_HODIN_VOPRED = 3;       // zákazník môže termín zrušiť alebo zmeniť najneskôr tolko hodín pred začiatkom
+
+// Počítadlo s pevným oknom uložené v cache: {n, t0}. Nový riadok okna začne pri prvom použití.
+function readCounter_(cache, key, windowMs, now) {
+  const raw = cache.get(key);
+  if (raw) {
+    try {
+      const o = JSON.parse(raw);
+      if (o && now - o.t0 < windowMs) return o;
+    } catch (err) { /* poškodený záznam: začne sa odznova */ }
+  }
+  return { n: 0, t0: now };
+}
+
+// Spotrebuje jedno "potvrdenie na tento e-mail". Vráti false, ak je limit vyčerpaný (nič sa vtedy nezapíše).
+function emailBudgetTake_(email) {
+  const cache = CacheService.getScriptCache();
+  const now = Date.now();
+  const h = hashKey_(String(email).trim().toLowerCase());
+  const k1 = 'eb1_' + h, k2 = 'eb6_' + h;
+  const w1 = 3600000, w2 = 21600000;
+  const c1 = readCounter_(cache, k1, w1, now);
+  const c2 = readCounter_(cache, k2, w2, now);
+  if (c1.n >= EMAIL_LIMIT_HODINA || c2.n >= EMAIL_LIMIT_6_HODIN) return false;
+  c1.n++; c2.n++;
+  try {
+    cache.put(k1, JSON.stringify(c1), Math.max(60, Math.ceil((w1 - (now - c1.t0)) / 1000)));
+    cache.put(k2, JSON.stringify(c2), Math.max(60, Math.ceil((w2 - (now - c2.t0)) / 1000)));
+  } catch (err) { /* bez cache sa limit len neuplatní */ }
+  return true;
+}
+
+function mailQuotaCritical_() {
+  try {
+    return MailApp.getRemainingDailyQuota() < KVOTA_MIN_NOVE_OBJEDNAVKY;
+  } catch (err) {
+    return false;
+  }
+}
+
+function pendingCountForEmail_(email, now) {
+  const e = String(email).trim().toLowerCase();
+  return readPending_().rows.filter(function(p) {
+    return isPendingActive_(p.r, now) && plain_(p.r[5]).toLowerCase() === e;
+  }).length;
+}
+
+const ABUSE_SPRAVA_EMAIL = 'Na túto adresu sme už poslali veľa potvrdení. Skús to prosím neskôr.';
+
+// Cloudflare Turnstile: bez TURNSTILE_SECRET sa nič nekontroluje. Pri výpadku Cloudflare objednávka prejde (inak by
+// jeho výpadok zablokoval skutočných zákazníkov); odmietne sa len jasne neplatný alebo chýbajúci žetón.
+function verifyTurnstile_(token) {
+  const secret = PropertiesService.getScriptProperties().getProperty('TURNSTILE_SECRET');
+  if (!secret) return true;
+  token = String(token || '');
+  if (!token || token.length > 2048) return false;
+  try {
+    const res = UrlFetchApp.fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'post', payload: { secret: secret, response: token }, muteHttpExceptions: true
+    });
+    if (res.getResponseCode() >= 500) return true;
+    const j = JSON.parse(res.getContentText());
+    return !!(j && j.success === true);
+  } catch (err) {
+    console.error('Overenie Turnstile zlyhalo (objednávka prechádza):', err);
+    return true;
+  }
+}
+
+// ---- Zrušenie / zmena termínu zákazníkom: najneskôr ZRUSENIE_HODIN_VOPRED hodín vopred ----
+// Holičovi to neplatí: jeho odkazy na zrušenie nesú podpis (holicToken_), bez neho sa "role=holic" v adrese ignoruje.
+function holicToken_(id) { return reviewToken_(String(id), 'cancel-holic'); }
+function holicCancelUrl_(id) { return getWebAppUrl_() + '?action=cancelPage&id=' + id + '&role=holic&t=' + holicToken_(id); }
+function isHolicRequest_(id, role, t) { return role === 'holic' && !!id && String(t || '') === holicToken_(id); }
+
+function minutesToStart_(ymd, hm) { return (slotStartMs_(ymd, hm) - bratislavaNow_().getTime()) / 60000; }
+
+// null = zmena je dovolená, inak text pre zákazníka
+function customerChangeBlock_(ymd, hm) {
+  const m = minutesToStart_(ymd, hm);
+  if (m < 0) return 'Tento termín už prebehol, zrušiť ani zmeniť sa už nedá.';
+  if (m < ZRUSENIE_HODIN_VOPRED * 60) {
+    const h = ZRUSENIE_HODIN_VOPRED;
+    return 'Termín je o menej ako ' + h + ' ' + (h === 1 ? 'hodinu' : (h < 5 ? 'hodiny' : 'hodín')) +
+      ', preto sa už nedá zrušiť ani zmeniť cez web. Ak sa naozaj nemôžeš dostaviť, napíš prosím na ' + KONTAKT_EMAIL + '.';
+  }
+  return null;
+}
+
+function changeBlockedPage_(text) {
+  return cardPage_('Zmena už nie je možná', '<p class="center">' + escapeHtml(text) + '</p>', 'Zrušenie termínu | Barbar Shop');
+}
+
 // Overí všetky dáta z formulára. Klientská validácia v script.js je len pre pohodlie používateľa,
 // dá sa jednoducho obísť priamym volaním API - túto validáciu preto nesmieme vynechať.
 function validateBookingData(data) {
@@ -544,6 +650,10 @@ function doPost(e) {
       return jsonOut({status: 'success'});
     }
 
+    if (!verifyTurnstile_(data.ts)) {
+      return jsonOut({error: 'Overenie, že nie si robot, sa nepodarilo. Obnov stránku a skús to znova.'});
+    }
+
     const validationError = validateBookingData(data);
     if (validationError) {
       return jsonOut({error: validationError});
@@ -555,6 +665,11 @@ function doPost(e) {
 
     if (!checkRateLimit(email)) {
       return jsonOut({error: 'Prosím počkaj pár sekúnd pred ďalším odoslaním.'});
+    }
+
+    // Míňa sa kvóta mailov: nové objednávky sa zastavia, aby ostalo na potvrdenia už čakajúcich rezervácií.
+    if (mailQuotaCritical_()) {
+      return jsonOut({error: 'Dnes už nevieme poslať ďalšie potvrdenia e-mailom. Skús to prosím zajtra alebo napíš na ' + KONTAKT_EMAIL + '.'});
     }
 
     const [y, m, d] = data.datum.split('-');
@@ -576,6 +691,13 @@ function doPost(e) {
     try {
       if (isSlotTaken_(slovakDate, data.cas, teraz)) {
         return jsonOut({error: 'Tento termín si medzitým niekto zarezervoval. Vyber si prosím iný.'});
+      }
+
+      if (pendingCountForEmail_(email, teraz) >= EMAIL_MAX_NEPOTVRDENYCH) {
+        return jsonOut({error: 'Na tento e-mail už čakajú ' + EMAIL_MAX_NEPOTVRDENYCH + ' nepotvrdené rezervácie. Potvrď ich v maile alebo ich zruš a skús znova.'});
+      }
+      if (!emailBudgetTake_(email)) {
+        return jsonOut({error: ABUSE_SPRAVA_EMAIL});
       }
 
       // Rezervácia najprv čaká v hárku "Nepotvrdené" (termín je pre ostatných obsadený). Mail s odkazom
@@ -628,12 +750,18 @@ function doGet(e) {
 
   // --- AKCIA 1: ZOBRAZENIE STRÁNKY NA ZADANIE DÔVODU ---
   if (action === 'cancelPage' && id) {
+    const holicOk = isHolicRequest_(id, role, e.parameter.t);
     const data = sheetRez.getDataRange().getDisplayValues(); 
     for (let i = 1; i < data.length; i++) {
       if (data[i][7] === id) { 
+        // Zákazník môže termín zrušiť najneskôr ZRUSENIE_HODIN_VOPRED hodín vopred (holič kedykoľvek, ale len s podpísaným odkazom)
+        const ymdC = slovakDateToYMD_(data[i][0]);
+        const blok = (!holicOk && ymdC) ? customerChangeBlock_(ymdC, String(data[i][1]).replace(/^'/, '').trim()) : null;
+        if (blok) return changeBlockedPage_(blok);
         const template = HtmlService.createTemplateFromFile('CancelPage');
         template.id = id;
-        template.role = role;
+        template.role = holicOk ? 'holic' : 'klient';
+        template.t = holicOk ? holicToken_(id) : '';
         template.meno = data[i][3];
         template.datum = data[i][0]; 
         template.cas = data[i][1].replace(/^'/, '');
@@ -642,7 +770,7 @@ function doGet(e) {
         template.busyCss = BUSY_BUTTON_CSS;
         template.busyJs = BUSY_BUTTON_JS;
         // Zmena termínu namiesto zrušenia (len zákazník, kým sa termín dá ešte zmeniť)
-        template.zmenaUrl = (role !== 'holic' && rescheduleInfo_(id).ok) ? rescheduleUrl_(id) : '';
+        template.zmenaUrl = (!holicOk && rescheduleInfo_(id).ok) ? rescheduleUrl_(id) : '';
         return template.evaluate().setTitle("Zrušenie rezervácie").addMetaTag('viewport', 'width=device-width, initial-scale=1');
       }
     }
@@ -652,6 +780,7 @@ function doGet(e) {
       const template = HtmlService.createTemplateFromFile('CancelPage');
       template.id = id;
       template.role = 'klient';
+      template.t = '';
       template.meno = plain_(pend.p.r[3]);
       template.datum = plain_(pend.p.r[0]);
       template.cas = plain_(pend.p.r[1], 'HH:mm');
@@ -667,6 +796,7 @@ function doGet(e) {
   // --- AKCIA 2: FYZICKÉ ZMAZANIE A ODOSLANIE HTML E-MAILU ---
   if (action === 'executeCancel' && id) {
     const dovodInput = (e && e.parameter.dovod) ? e.parameter.dovod.trim() : "";
+    const holicOk = isHolicRequest_(id, role, e.parameter.t);
     let termiZruseny = false;
     let nepotvrdena = false;
 
@@ -684,14 +814,20 @@ function doGet(e) {
           let meno = data[i][3];
           let dStr = data[i][0];
           let cas = data[i][1].replace(/^'/, '');
+
+          if (!holicOk) {
+            const ymdX = slovakDateToYMD_(dStr);
+            const blok = ymdX ? customerChangeBlock_(ymdX, cas.trim()) : null;
+            if (blok) return changeBlockedPage_(blok);
+          }
           
-          archiveReservation(data[i], role === 'holic' ? 'Zrušil holič' : 'Zrušil zákazník', dovodInput);
+          archiveReservation(data[i], holicOk ? 'Zrušil holič' : 'Zrušil zákazník', dovodInput);
           sheetRez.deleteRow(i + 1);
           termiZruseny = true;
           invalidatePublicCache_(); // termín sa na webe má hneď uvoľniť
           
           try {
-            if (role === 'holic') {
+            if (holicOk) {
               const subject = "⚠️ Zrušenie rezervácie - Barbar Shop";
               const bodyHtml = generateCancellationEmailHtml(meno, dStr, cas, dovodInput, true);
               MailApp.sendEmail({ name: MAIL_NAZOV, to: email, subject: subject, htmlBody: bodyHtml });
@@ -2211,7 +2347,7 @@ function sendBarberNewBookingMail_(meno, sluzba, datum, cas, email, id) {
   sablona.datum = datum;
   sablona.cas = cas;
   sablona.emailKlienta = email;
-  sablona.cancelUrl = `${baseUrl}?action=cancelPage&id=${id}&role=holic`;
+  sablona.cancelUrl = holicCancelUrl_(id);
   sablona.viewUrl = `${baseUrl}?action=viewEmail&id=${id}`;
   sablona.vyzvaText = "Ak potrebuješ tento termín zrušiť z prevádzkových alebo iných dôvodov, klikni nižšie na tlačidlo:";
   sablona.jeHolic = true;
@@ -2278,6 +2414,7 @@ function handlePendingAction_(data) {
       if (email.length > 200 || !EMAIL_REGEX.test(email)) return { error: 'Zadaj platný e-mail.' };
       const zmeny = Number(found.p.r[12]) || 0;
       if (zmeny >= POTVRDENIE_MAX_ZMIEN) return { error: 'E-mail sa už nedá znova zmeniť. Zruš rezerváciu a vytvor novú.' };
+      if (!emailBudgetTake_(email)) return { error: ABUSE_SPRAVA_EMAIL };
       // Nový kód: odkaz z mailu na pôvodnú (zlú) adresu prestane platiť. Odpočet beží odznova.
       const novyKod = Utilities.getUuid();
       found.sheet.getRange(found.p.row, 6).setValue(safeCell(email));
@@ -2571,7 +2708,7 @@ function rescheduleInfo_(id) {
   if (!UUID_REGEX.test(id)) return { error: 'Neplatný odkaz.' };
   const f = findConfirmedReservation_(id);
   if (!f) return { error: 'Táto rezervácia sa nenašla (možno bola zrušená alebo ešte nebola potvrdená).' };
-  if (slotStartMs_(f.ymd, f.cas) <= bratislavaNow_().getTime()) return { error: 'Tento termín už prebehol, zmeniť sa nedá.' };
+  { const blok = customerChangeBlock_(f.ymd, f.cas); if (blok) return { error: blok }; }
   const zostava = ZMENA_MAX - f.zmeny;
   if (zostava <= 0) return { error: 'Termín sa už nedá znova zmeniť. Zruš rezerváciu a vytvor novú.' };
   return { ok: true, datum: f.ymd, cas: f.cas, sluzba: f.sluzba, zmenyZostava: zostava };
@@ -2591,7 +2728,7 @@ function rescheduleBooking_(data) {
   try {
     f = findConfirmedReservation_(id);
     if (!f) return { error: 'Táto rezervácia sa nenašla (možno bola zrušená).' };
-    if (slotStartMs_(f.ymd, f.cas) <= bratislavaNow_().getTime()) return { error: 'Tento termín už prebehol, zmeniť sa nedá.' };
+    { const blok = customerChangeBlock_(f.ymd, f.cas); if (blok) return { error: blok }; }
     if (f.zmeny >= ZMENA_MAX) return { error: 'Termín sa už nedá znova zmeniť. Zruš rezerváciu a vytvor novú.' };
     if (f.ymd === data.datum && f.cas === data.cas) return { error: 'To je ten istý termín. Vyber si iný.' };
     const [y, m, d] = data.datum.split('-');
@@ -2625,7 +2762,7 @@ function rescheduleBooking_(data) {
     sendBarberMailOrDefer_(
       { subject: `Zmena termínu: ${f.meno} (${novyDatumSk2})`,
         htmlBody: generateRescheduleBarberHtml_(f.meno, f.sluzba, povodny.datumSk, povodny.cas, novyDatumSk2, data.cas, f.email, id) },
-      { typ: 'Zmenené termíny', text: `${f.meno}: z ${povodny.datumSk} o ${povodny.cas} na ${novyDatumSk2} o ${data.cas} (${f.sluzba})`, odkazy: [{ t: 'Zrušiť', u: getWebAppUrl_() + '?action=cancelPage&id=' + id + '&role=holic' }] }
+      { typ: 'Zmenené termíny', text: `${f.meno}: z ${povodny.datumSk} o ${povodny.cas} na ${novyDatumSk2} o ${data.cas} (${f.sluzba})`, odkazy: [{ t: 'Zrušiť', u: holicCancelUrl_(id) }] }
     );
   } catch (err) {
     console.error('Mail holičovi o zmene termínu zlyhal:', err);
@@ -2660,7 +2797,7 @@ function generateRescheduleBarberHtml_(meno, sluzba, staryDatum, staryCas, novyD
   sablona.datum = novyDatum;
   sablona.cas = novyCas;
   sablona.emailKlienta = email;
-  sablona.cancelUrl = getWebAppUrl_() + '?action=cancelPage&id=' + id + '&role=holic';
+  sablona.cancelUrl = holicCancelUrl_(id);
   sablona.viewUrl = getWebAppUrl_() + '?action=viewEmail&id=' + id;
   sablona.vyzvaText = 'Ak potrebuješ tento termín zrušiť, klikni nižšie na tlačidlo:';
   sablona.jeHolic = true;
@@ -3226,7 +3363,7 @@ function generateReminderEmailHtml(meno, cas, timeDiff, dovodText, id, baseUrl) 
     cas = escapeHtml(cas);
 
     // Vytvoríme odkaz na zrušovaciu stránku pre holiča
-    const cancelUrl = baseUrl + "?action=cancelPage&id=" + id + "&role=holic";
+    const cancelUrl = holicCancelUrl_(id);
 
     // --- LOGIKA PREFORMÁTOVANIA ČASU ---
     let casovyUdaj = "";
