@@ -944,7 +944,7 @@ function doGet(e) {
   // --- AKCIA 3b: STRÁNKA NA NAPÍSANIE RECENZIE ---
   if (action === 'reviewPage' && id) {
     const rez = findReservationForReview_(id);
-    const chyba = !rez ? 'nenajdene' : (rez.chyba || (reviewExists_(id) ? 'existuje' : null));
+    const chyba = !rez ? 'nenajdene' : (rez.chyba || ((reviewExists_(id) || emailHasReview_(rez.email)) ? 'existuje' : null));
     if (chyba) {
       return HtmlService.createHtmlOutput(htmlStart + escapeHtml(REVIEW_CHYBY[chyba]) + htmlEnd);
     }
@@ -1378,7 +1378,7 @@ const REVIEW_CHYBY = {
   zrusena: 'Tento termín bol zrušený, takže sa k nemu nedá napísať recenzia.',
   este_nie: 'Na recenziu si ešte počkaj, kým strih prebehne.',
   expirovane: 'Platnosť odkazu na recenziu už vypršala.',
-  existuje: 'K tejto návšteve už recenzia existuje, ďakujeme!'
+  existuje: 'K tomuto e-mailu už recenzia existuje, ďakujeme!'
 };
 
 function getReviewSheet_() {
@@ -1453,7 +1453,106 @@ function bratislavaNow_() {
   return new Date(Utilities.formatDate(new Date(), 'Europe/Bratislava', 'yyyy/MM/dd HH:mm:ss'));
 }
 
-// Vráti {datum, cas, meno, sluzba}, alebo {chyba: kód z REVIEW_CHYBY}, alebo null (nenájdené).
+// ===================== JEDNA RECENZIA NA JEDEN E-MAIL =====================
+// Prosba o recenziu sa pošle na adresu najviac raz (po prvej návšteve) a recenzia sa dá napísať k adrese najviac raz,
+// nikdy znova (aj keby prišla ďalšia návšteva). Adresy sa tu neukladajú čitateľne, len ako nečitateľný odtlačok
+// (HMAC s tajným kľúčom skriptu). Hárok "Adresy recenzií": ak chceš adrese dovoliť recenziu znova (alebo si skúšaš
+// celý postup na svojom e-maile), zmaž jej riadok (odtlačok sa na adresu spätne previesť nedá, riadky rozlíš podľa dátumu).
+const SHEET_RECENZIE_ADRESY = 'Adresy recenzií';
+const RECENZIE_ADRESY_HLAVICKA = ['Odtlačok e-mailu (nečitateľný)', 'Stav', 'Dátum'];
+const RA_ZIADOST = 'Žiadosť odoslaná';
+const RA_RECENZIA = 'Recenzia napísaná';
+
+function emailFingerprint_(email) {
+  const e = String(email || '').trim().toLowerCase();
+  if (!e || e === String(ARCHIV_ANONYMIZOVANE).toLowerCase()) return '';
+  return reviewToken_(e, 'email-fp');
+}
+
+function getReviewAddressSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_RECENZIE_ADRESY);
+  if (!sheet) {
+    const povodny = ss.getActiveSheet();
+    sheet = ss.insertSheet(SHEET_RECENZIE_ADRESY);
+    sheet.getRange(1, 1, 1, RECENZIE_ADRESY_HLAVICKA.length).setValues([RECENZIE_ADRESY_HLAVICKA]).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+    try { ss.setActiveSheet(povodny); } catch (err) {}
+  }
+  return sheet;
+}
+
+// {fp: {row, stav}} z hárka (hárok sa pri čítaní nevytvára)
+function readReviewAddresses_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_RECENZIE_ADRESY);
+  const map = {};
+  if (!sheet || sheet.getLastRow() < 2) return map;
+  sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues().forEach(function(r, i) {
+    if (r[0]) map[String(r[0])] = { row: i + 2, stav: String(r[1]) };
+  });
+  return map;
+}
+
+// list = [{fp, stav}]: nové adresy sa pridajú naraz, "Žiadosť odoslaná" sa pri recenzii prepíše na "Recenzia napísaná".
+function addReviewAddresses_(list) {
+  const nove = list.filter(function(x) { return x && x.fp; });
+  if (!nove.length) return;
+  const sheet = getReviewAddressSheet_();
+  const map = readReviewAddresses_();
+  const dnes = Utilities.formatDate(new Date(), 'Europe/Bratislava', 'd.M.yyyy');
+  const pridat = [];
+  nove.forEach(function(x) {
+    const e = map[x.fp];
+    if (!e) {
+      pridat.push([x.fp, x.stav, dnes]);
+      map[x.fp] = { row: -1, stav: x.stav, idx: pridat.length - 1 };
+    } else if (e.stav !== RA_RECENZIA && x.stav === RA_RECENZIA) {
+      if (e.row > 0) sheet.getRange(e.row, 2).setValue(RA_RECENZIA);
+      else pridat[e.idx][1] = RA_RECENZIA; // adresa je v tej istej dávke ešte len pridávaná
+      e.stav = RA_RECENZIA;
+    }
+  });
+  if (pridat.length) sheet.getRange(sheet.getLastRow() + 1, 1, pridat.length, 3).setValues(pridat);
+}
+
+function emailHasReview_(email) {
+  const fp = emailFingerprint_(email);
+  if (!fp) return false;
+  const e = readReviewAddresses_()[fp];
+  return !!e && e.stav === RA_RECENZIA;
+}
+
+// Doplní evidenciu o to, čo vzniklo pred zavedením pravidla: existujúce recenzie a už odoslané prosby. Beží pri
+// otvorení tabuľky, opakované spustenie nič nezmení.
+function rebuildReviewAddressIndex_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const emailPodlaId = {};
+  const poslane = [];
+  const rez = ss.getSheetByName(SHEET_NAME);
+  if (rez && rez.getLastRow() > 1) {
+    rez.getRange(2, 1, rez.getLastRow() - 1, Math.max(REVIEW_STLPEC_MAILU, 8)).getDisplayValues().forEach(function(r) {
+      if (r[7]) emailPodlaId[r[7]] = r[5];
+      if (r[REVIEW_STLPEC_MAILU - 1] === 'POSLANÉ') poslane.push(r[5]);
+    });
+  }
+  const arch = ss.getSheetByName(SHEET_ARCHIV);
+  if (arch && arch.getLastRow() > 1) {
+    arch.getRange(2, 1, arch.getLastRow() - 1, ARCHIV_HLAVICKA.length).getDisplayValues().forEach(function(r) {
+      if (r[6] && !emailPodlaId[r[6]]) emailPodlaId[r[6]] = r[5];
+    });
+  }
+  const list = poslane.map(function(e) { return { fp: emailFingerprint_(e), stav: RA_ZIADOST }; });
+  const rec = ss.getSheetByName(SHEET_RECENZIE);
+  if (rec && rec.getLastRow() > 1) {
+    rec.getRange(2, 1, rec.getLastRow() - 1, 1).getDisplayValues().forEach(function(r) {
+      const e = emailPodlaId[r[0]];
+      if (e) list.push({ fp: emailFingerprint_(e), stav: RA_RECENZIA });
+    });
+  }
+  addReviewAddresses_(list);
+}
+
+// Vráti {datum, cas, meno, sluzba, email}, alebo {chyba: kód z REVIEW_CHYBY}, alebo null (nenájdené).
 function findReservationForReview_(id) {
   if (!id || !/^[0-9a-f-]{36}$/i.test(id)) return null;
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1464,7 +1563,7 @@ function findReservationForReview_(id) {
     const data = sheetRez.getDataRange().getDisplayValues();
     for (let i = 1; i < data.length; i++) {
       if (data[i][7] === id) {
-        rez = { datum: data[i][0], cas: String(data[i][1]).replace(/^'/, ''), meno: data[i][3], sluzba: data[i][4] };
+        rez = { datum: data[i][0], cas: String(data[i][1]).replace(/^'/, ''), meno: data[i][3], sluzba: data[i][4], email: data[i][5] };
         break;
       }
     }
@@ -1476,7 +1575,7 @@ function findReservationForReview_(id) {
       for (let i = 0; i < data.length; i++) {
         if (data[i][6] === id) {
           if (data[i][7] !== 'Prebehla') return { chyba: 'zrusena' };
-          rez = { datum: data[i][0], cas: String(data[i][1]).replace(/^'/, ''), meno: data[i][3], sluzba: data[i][4] };
+          rez = { datum: data[i][0], cas: String(data[i][1]).replace(/^'/, ''), meno: data[i][3], sluzba: data[i][4], email: data[i][5] };
           break;
         }
       }
@@ -1687,7 +1786,7 @@ function submitReview(payload) {
       const rez = findReservationForReview_(id);
       if (!rez) return { ok: false, error: REVIEW_CHYBY.nenajdene };
       if (rez.chyba) return { ok: false, error: REVIEW_CHYBY[rez.chyba] };
-      if (reviewExists_(id)) return { ok: false, error: REVIEW_CHYBY.existuje };
+      if (reviewExists_(id) || emailHasReview_(rez.email)) return { ok: false, error: REVIEW_CHYBY.existuje };
       rezInfo = rez;
 
       const sheet = getReviewSheet_();
@@ -1719,6 +1818,7 @@ function submitReview(payload) {
       sheet.getRange(cielovyRiadok, RECENZIE_STLPEC_SCHVALENE).insertCheckboxes();
       sheet.getRange(cielovyRiadok, RECENZIE_STLPEC_ZMAZAT).insertCheckboxes();
       setReviewLink_(sheet, cielovyRiadok, id);
+      addReviewAddresses_([{ fp: emailFingerprint_(rez.email), stav: RA_RECENZIA }]); // táto adresa už viac recenziu nenapíše
     } finally {
       lock.releaseLock();
     }
@@ -2058,6 +2158,7 @@ function sendReviewRequests() {
     const dnes = bratislavaNow_();
     dnes.setHours(0, 0, 0, 0);
     const baseUrl = getWebAppUrl_();
+    const adresy = readReviewAddresses_(); // adresy, ktoré už prosbu dostali alebo recenziu napísali
 
     for (let i = 1; i < data.length; i++) {
       if (data[i][REVIEW_STLPEC_MAILU - 1]) continue;
@@ -2070,6 +2171,13 @@ function sendReviewRequests() {
       const dniOdTerminu = Math.round((dnes.getTime() - new Date(d[0], d[1] - 1, d[2]).getTime()) / 86400000);
       if (dniOdTerminu < 1 || dniOdTerminu > 5) continue;
 
+      // Jedna prosba na adresu: kto ju už dostal (aj k staršej návšteve) alebo recenziu napísal, nedostane ďalšiu.
+      const fp = emailFingerprint_(email);
+      if (fp && adresy[fp]) {
+        sheet.getRange(i + 1, REVIEW_STLPEC_MAILU).setValue('NEPOSIELA SA (e-mail už mal)');
+        continue;
+      }
+
       // Rezervujeme si časť dennej kvóty pre potvrdenia rezervácií.
       // (neodoslané ostanú neoznačené a skúsia sa pri ďalšom dennom behu)
       if (mailQuotaLow_()) break;
@@ -2081,6 +2189,10 @@ function sendReviewRequests() {
           htmlBody: generateReviewEmailHtml_(data[i][3], data[i][0], baseUrl + '?action=reviewPage&id=' + id)
         });
         sheet.getRange(i + 1, REVIEW_STLPEC_MAILU).setValue('POSLANÉ');
+        if (fp) {
+          adresy[fp] = { row: -1, stav: RA_ZIADOST };
+          addReviewAddresses_([{ fp: fp, stav: RA_ZIADOST }]);
+        }
       } catch (err) {
         console.error('Mail s recenziou sa neodoslal (riadok ' + (i + 1) + '):', err);
       }
@@ -2213,6 +2325,7 @@ function onOpen() {
       upgradeReviewSheet_(recenzie);
       backfillReviewLinks_(recenzie);
     }
+    rebuildReviewAddressIndex_();
   } catch (err) {
     console.error('Úprava hárku Recenzie zlyhala:', err);
   }
