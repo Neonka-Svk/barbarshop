@@ -1758,7 +1758,7 @@ function submitReview(payload) {
       sendBarberMailOrDefer_(
         { subject: 'Nová recenzia čaká na schválenie (' + stars + '/5)', htmlBody: generateNewReviewEmailHtml_(name, stars, text, approveUrl, deleteUrl, sheetUrl, pocetFotiek) },
         { typ: 'Nové recenzie', text: name + ' (' + stars + '/5): ' + (text.length > 140 ? text.slice(0, 140) + '...' : text) + (pocetFotiek ? ' [' + pocetFotiek + ' foto]' : ''),
-          odkazy: [{ t: 'Schváliť', u: approveUrl }, { t: 'Zmazať', u: deleteUrl }] }
+          odkazy: pocetFotiek > 0 ? [{ t: 'Skontrolovať recenziu', u: approveUrl }] : [{ t: 'Schváliť', u: approveUrl }, { t: 'Zmazať', u: deleteUrl }] }
       );
     } catch (err) {
       console.error('Upozornenie na novú recenziu sa neodoslalo:', err);
@@ -1838,7 +1838,7 @@ const BUSY_BUTTON_JS = `
 })();`;
 
 // Počítadlo zaškrtnutých fotiek na stránke schválenia (len text, nič neodosiela).
-const RM_HINT_SCRIPT = '<script>(function(){var h=document.getElementById("rm-hint"),c=document.querySelectorAll("input[name=rm]");if(!h)return;function u(){var n=0;c.forEach(function(x){if(x.checked)n++;});h.textContent=n?"Odstráni sa fotiek: "+n+" z "+c.length+". Ostatné sa zverejnia spolu s recenziou.":"Nevhodnú fotku zaškrtni (Odstrániť), zmaže sa. Ostatné sa zverejnia spolu s recenziou.";}c.forEach(function(x){x.addEventListener("change",u);});})();</script>';
+const RM_HINT_SCRIPT = `<script>(function(){var h=document.getElementById("rm-hint"),c=document.querySelectorAll("input[name=rm]");if(!h)return;var m=c.length;function u(){var n=0;c.forEach(function(x){if(x.checked)n++;});var r=m-n,t;if(!n){t=m===1?"Ak je fotka nevhodná, zaškrtni Odstrániť. Inak sa zverejní spolu s recenziou.":"Nevhodné fotky zaškrtni (Odstrániť), zmažú sa. Ostatné sa zverejnia spolu s recenziou.";}else{t=(n===1?"Odstráni sa 1 fotka":(n<=4?"Odstránia sa "+n+" fotky":"Odstráni sa "+n+" fotiek"))+" z "+m+". "+(r===0?"Recenzia sa zverejní bez fotiek.":(r===1?"Zostávajúca fotka sa zverejní spolu s recenziou.":"Zostávajúce fotky sa zverejnia spolu s recenziou."));}h.textContent=t;}c.forEach(function(x){x.addEventListener("change",u);});u();})();</script>`;
 
 // Jednoduchá stránka pre holiča (schválenie recenzie). Všetko dynamické sa escapuje.
 function reviewAdminPage_(title, innerHtml) {
@@ -1859,7 +1859,7 @@ function cardPage_(title, innerHtml, tabTitle) {
     '.link{display:block;text-align:center;color:#f0c419;margin-top:16px;font-size:14px}.ok{font-size:60px;color:#4caf50;text-align:center}p{line-height:1.5}' +
     '.photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px;margin:14px 0}.photos img{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:6px;display:block}' +
     '.details{background:#1a1a1a;border-left:4px solid #f0c419;border-radius:6px;padding:12px 15px;margin:16px 0;line-height:1.7;overflow-wrap:anywhere}.details b{color:#f0c419}' +
-    '.ph{position:relative;display:block;cursor:pointer}.ph-rm{position:absolute;left:4px;right:4px;bottom:4px;display:flex;gap:6px;align-items:center;background:rgba(0,0,0,.72);color:#fff;font-size:12px;padding:4px 6px;border-radius:4px}.ph-rm input{margin:0;width:16px;height:16px}.ph:has(input:checked) img{opacity:.25;outline:3px solid #d32f2f}.ph:has(input:checked) .ph-rm{background:#d32f2f}.rm-hint{font-size:13px;color:#aaa;text-align:center;margin:6px 0 16px}.btn.gold{background:#f0c419;color:#1a1a1a}.btn.gold:hover{background:#d9b016}.btn.ghost{background:transparent;color:#f0c419;border:1px solid #f0c419}.btn.ghost:hover{background:rgba(240,196,25,.12)}.center{text-align:center}' +
+    '.btn-row{display:flex;gap:10px;margin-top:18px}.btn-row .btn{flex:1;margin-top:0;display:flex;align-items:center;justify-content:center;text-align:center}.btn-row button.btn{flex:2}.btn.red{background:#d32f2f}.btn.red:hover{background:#b71c1c}.ph{position:relative;display:block;cursor:pointer}.ph-rm{position:absolute;left:4px;right:4px;bottom:4px;display:flex;gap:6px;align-items:center;background:rgba(0,0,0,.72);color:#fff;font-size:12px;padding:4px 6px;border-radius:4px}.ph-rm input{margin:0;width:16px;height:16px}.ph:has(input:checked) img{opacity:.25;outline:3px solid #d32f2f}.ph:has(input:checked) .ph-rm{background:#d32f2f}.rm-hint{font-size:13px;color:#aaa;text-align:center;margin:6px 0 16px}.btn.gold{background:#f0c419;color:#1a1a1a}.btn.gold:hover{background:#d9b016}.btn.ghost{background:transparent;color:#f0c419;border:1px solid #f0c419}.btn.ghost:hover{background:rgba(240,196,25,.12)}.center{text-align:center}' +
     BUSY_BUTTON_CSS +
     '</style></head><body><div class="card"><h2>' + escapeHtml(title) + '</h2>' + innerHtml + '</div><script>' + BUSY_BUTTON_JS + '</script></body></html>';
   return HtmlService.createHtmlOutput(html).setTitle(tabTitle).addMetaTag('viewport', 'width=device-width, initial-scale=1');
@@ -1885,13 +1885,13 @@ function showApproveReviewPage_(id, token) {
     '<div class="quote">' + escapeHtml(r.text) + '</div>' +
     '<form method="GET" action="' + escapeHtml(getWebAppUrl_()) + '" target="_top">' +
     reviewPhotoPreviewHtml_(r.raw, true) +
-    (r.raw[RECENZIE_STLPEC_FOTKY - 1] ? '<p class="rm-hint" id="rm-hint">Nevhodnú fotku zaškrtni (Odstrániť), zmaže sa. Ostatné sa zverejnia spolu s recenziou.</p>' + RM_HINT_SCRIPT : '') +
-    '<div class="who">Zobrazí sa ako: <strong>' + escapeHtml(r.name) + '</strong></div>' +
+    (r.raw[RECENZIE_STLPEC_FOTKY - 1] ? '<p class="rm-hint" id="rm-hint"></p>' + RM_HINT_SCRIPT : '') +
+    '<div class="who">Recenzia bude zverejnená pod menom: <strong>' + escapeHtml(r.name) + '</strong></div>' +
     '<input type="hidden" name="action" value="doApproveReview"><input type="hidden" name="id" value="' + escapeHtml(id) + '"><input type="hidden" name="t" value="' + escapeHtml(token) + '">' +
     '<label for="odpoved">Tvoja odpoveď pod recenziou (nepovinné)</label>' +
     '<textarea id="odpoved" name="odpoved" maxlength="500" placeholder="Napr. Ďakujeme, tešíme sa na ďalšiu návštevu!"></textarea>' +
-    '<button type="submit" class="btn" data-busy="ZVEREJŇUJEM...">SCHVÁLIŤ A ZVEREJNIŤ</button></form>' +
-    '<a class="link" href="' + sheetUrl + '" target="_top">Radšej otvoriť tabuľku</a>');
+    '<div class="btn-row"><button type="submit" class="btn" data-busy="ZVEREJŇUJEM...">SCHVÁLIŤ A ZVEREJNIŤ</button>' +
+    '<a class="btn red" href="' + escapeHtml(getWebAppUrl_() + '?action=deleteReview&id=' + id + '&t=' + reviewToken_(id, 'delete')) + '" target="_top">ZMAZAŤ</a></div></form>');
 }
 
 // Krok 2: skutočné schválenie.
@@ -1987,13 +1987,13 @@ function generateNewReviewEmailHtml_(name, stars, text, approveUrl, deleteUrl, s
     '<p style="margin:0 0 20px 0;text-align:center;color:#555555;font-size:14px;">od <strong style="color:#1a1a1a;">' + escapeHtml(name) + '</strong> &middot; ' + stars + ' z 5</p>' +
     '<table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color:#fafafa;border:1px solid #eaeaea;border-left:4px solid #f0c419;border-radius:8px;border-collapse:separate;"><tr><td style="padding:18px 20px;color:#1a1a1a;font-size:16px;line-height:1.6;">' +
     escapeHtml(text).replace(/\n/g, '<br>') + '</td></tr></table>' +
-    (pocetFotiek > 0 ? '<p style="margin:14px 0 0 0;text-align:center;color:#555555;font-size:14px;">' + (pocetFotiek === 1 ? 'K recenzii je priložená <strong>1</strong> fotka' : (pocetFotiek < 5 ? 'K recenzii sú priložené <strong>' + pocetFotiek + '</strong> fotky' : 'K recenzii je priložených <strong>' + pocetFotiek + '</strong> fotiek')) + ' (uvidíš ich v náhľade po kliknutí na Schváliť, kde môžeš nevhodnú fotku odstrániť).</p>' : '') +
+    (pocetFotiek > 0 ? '<p style="margin:14px 0 0 0;text-align:center;color:#555555;font-size:14px;">' + (pocetFotiek === 1 ? 'K recenzii je priložená <strong>1</strong> fotka' : (pocetFotiek < 5 ? 'K recenzii sú priložené <strong>' + pocetFotiek + '</strong> fotky' : 'K recenzii je priložených <strong>' + pocetFotiek + '</strong> fotiek')) + '. Pozri si ' + (pocetFotiek === 1 ? 'ju' : 'ich') + ' po kliknutí na tlačidlo nižšie, kde môžeš nevhodnú fotku odstrániť.</p>' : '') +
     '<div style="text-align:center;margin-top:28px;">' +
-    btn(approveUrl, 'SCHVÁLIŤ', '#2e7d32', '#ffffff') +
-    btn(deleteUrl, 'ZMAZAŤ', '#d32f2f', '#ffffff') +
-    btn(sheetUrl, 'OTVORIŤ TABUĽKU', '#1a1a1a', '#f0c419') +
+    (pocetFotiek > 0
+      ? btn(approveUrl, 'SKONTROLOVAŤ RECENZIU', '#f0c419', '#1a1a1a')
+      : btn(approveUrl, 'SCHVÁLIŤ', '#2e7d32', '#ffffff') + btn(deleteUrl, 'ZMAZAŤ', '#d32f2f', '#ffffff')) +
     '</div>' +
-    '<p style="margin:22px 0 0 0;text-align:center;color:#888888;font-size:13px;">Po kliknutí na "Schváliť" alebo "Zmazať" uvidíš najprv náhľad a až potvrdením sa niečo vykoná.</p>' +
+    '<p style="margin:22px 0 0 0;text-align:center;color:#888888;font-size:13px;">' + (pocetFotiek > 0 ? 'Na stránke uvidíš recenziu aj fotky a až potvrdením sa niečo vykoná.' : 'Po kliknutí na "Schváliť" alebo "Zmazať" uvidíš najprv náhľad a až potvrdením sa niečo vykoná.') + '</p>' +
     '</td></tr>' +
     '<tr><td align="center" style="background-color:#f9f9f9;padding:22px;border-top:1px solid #eaeaea;font-size:12px;color:#999999;line-height:1.5;"><p style="margin:0;">Tento e-mail bol vygenerovaný automaticky systémom Barbar Shop. &copy; 2026 Barbar Shop. Sila a česť.</p></td></tr>' +
     '</table></td></tr></table></body></html>';
