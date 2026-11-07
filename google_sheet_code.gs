@@ -1987,7 +1987,7 @@ function generateNewReviewEmailHtml_(name, stars, text, approveUrl, deleteUrl, s
     '<p style="margin:0 0 20px 0;text-align:center;color:#555555;font-size:14px;">od <strong style="color:#1a1a1a;">' + escapeHtml(name) + '</strong> &middot; ' + stars + ' z 5</p>' +
     '<table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color:#fafafa;border:1px solid #eaeaea;border-left:4px solid #f0c419;border-radius:8px;border-collapse:separate;"><tr><td style="padding:18px 20px;color:#1a1a1a;font-size:16px;line-height:1.6;">' +
     escapeHtml(text).replace(/\n/g, '<br>') + '</td></tr></table>' +
-    (pocetFotiek > 0 ? '<p style="margin:14px 0 0 0;text-align:center;color:#555555;font-size:14px;">&#128247; K recenzii je priložených <strong>' + pocetFotiek + '</strong> ' + (pocetFotiek === 1 ? 'fotka' : (pocetFotiek < 5 ? 'fotky' : 'fotiek')) + ' (uvidíš ich v náhľade po kliknutí na Schváliť, kde môžeš nevhodnú fotku odstrániť).</p>' : '') +
+    (pocetFotiek > 0 ? '<p style="margin:14px 0 0 0;text-align:center;color:#555555;font-size:14px;">' + (pocetFotiek === 1 ? 'K recenzii je priložená <strong>1</strong> fotka' : (pocetFotiek < 5 ? 'K recenzii sú priložené <strong>' + pocetFotiek + '</strong> fotky' : 'K recenzii je priložených <strong>' + pocetFotiek + '</strong> fotiek')) + ' (uvidíš ich v náhľade po kliknutí na Schváliť, kde môžeš nevhodnú fotku odstrániť).</p>' : '') +
     '<div style="text-align:center;margin-top:28px;">' +
     btn(approveUrl, 'SCHVÁLIŤ', '#2e7d32', '#ffffff') +
     btn(deleteUrl, 'ZMAZAŤ', '#d32f2f', '#ffffff') +
