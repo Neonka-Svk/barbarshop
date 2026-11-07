@@ -944,7 +944,7 @@ function doGet(e) {
   // --- AKCIA 3b: STRÁNKA NA NAPÍSANIE RECENZIE ---
   if (action === 'reviewPage' && id) {
     const rez = findReservationForReview_(id);
-    const chyba = !rez ? 'nenajdene' : (rez.chyba || ((reviewExists_(id) || emailHasReview_(rez.email)) ? 'existuje' : null));
+    const chyba = !rez ? 'nenajdene' : (rez.chyba || (visitReviewDeleted_(id) ? 'zmazana' : ((reviewExists_(id) || emailHasReview_(rez.email)) ? 'existuje' : null)));
     if (chyba) {
       return HtmlService.createHtmlOutput(htmlStart + escapeHtml(REVIEW_CHYBY[chyba]) + htmlEnd);
     }
@@ -1257,6 +1257,7 @@ function handleEditInner_(e) {
     if (odpoved === ui.Button.YES) {
       deleteReviewPhotos_(r);
       sheet.deleteRow(e.range.getRow());
+      releaseReviewAddress_(String(r[0]));
     } else {
       e.range.setValue(false);
     }
@@ -1378,7 +1379,8 @@ const REVIEW_CHYBY = {
   zrusena: 'Tento termín bol zrušený, takže sa k nemu nedá napísať recenzia.',
   este_nie: 'Na recenziu si ešte počkaj, kým strih prebehne.',
   expirovane: 'Platnosť odkazu na recenziu už vypršala.',
-  existuje: 'K tomuto e-mailu už recenzia existuje, ďakujeme!'
+  existuje: 'K tomuto e-mailu už recenzia existuje, ďakujeme!',
+  zmazana: 'Recenzia k tejto návšteve bola odstránená. Ďalšiu budeš môcť napísať po ďalšej návšteve.'
 };
 
 function getReviewSheet_() {
@@ -1462,6 +1464,7 @@ const SHEET_RECENZIE_ADRESY = 'Adresy recenzií';
 const RECENZIE_ADRESY_HLAVICKA = ['Odtlačok e-mailu (nečitateľný)', 'Stav', 'Dátum'];
 const RA_ZIADOST = 'Žiadosť odoslaná';
 const RA_RECENZIA = 'Recenzia napísaná';
+const RA_ZMAZANA = 'Recenzia k návšteve zmazaná'; // značka návštevy (nie adresy): starým odkazom sa k nej znova písať nedá
 
 function emailFingerprint_(email) {
   const e = String(email || '').trim().toLowerCase();
@@ -1522,17 +1525,56 @@ function emailHasReview_(email) {
   return !!e && e.stav === RA_RECENZIA;
 }
 
+function visitKey_(rezervaciaId) { return reviewToken_(String(rezervaciaId), 'deleted-visit'); }
+
+function reservationEmailById_(id) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const rez = ss.getSheetByName(SHEET_NAME);
+  if (rez && rez.getLastRow() > 1) {
+    const d = rez.getRange(2, 1, rez.getLastRow() - 1, 8).getDisplayValues();
+    for (let i = 0; i < d.length; i++) if (d[i][7] === id) return d[i][5];
+  }
+  const arch = ss.getSheetByName(SHEET_ARCHIV);
+  if (arch && arch.getLastRow() > 1) {
+    const d = arch.getRange(2, 1, arch.getLastRow() - 1, ARCHIV_HLAVICKA.length).getDisplayValues();
+    for (let i = 0; i < d.length; i++) if (d[i][6] === id) return d[i][5];
+  }
+  return '';
+}
+
+function visitReviewDeleted_(rezervaciaId) {
+  const e = readReviewAddresses_()[visitKey_(rezervaciaId)];
+  return !!e && e.stav === RA_ZMAZANA;
+}
+
+// Holič recenziu zmazal: adresa je zasa voľná (pri najbližšej návšteve dostane prosbu o recenziu), ale k tejto návšteve
+// sa už písať nedá (starý odkaz by inak umožnil napísať ju hneď znova). Volať pri zmazaní recenzie.
+function releaseReviewAddress_(rezervaciaId) {
+  try {
+    const sheet = getReviewAddressSheet_();
+    const fp = emailFingerprint_(reservationEmailById_(rezervaciaId));
+    const map = readReviewAddresses_();
+    if (fp && map[fp] && map[fp].stav === RA_RECENZIA) sheet.deleteRow(map[fp].row);
+    if (!map[visitKey_(rezervaciaId)]) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, 1, 3).setValues([[visitKey_(rezervaciaId), RA_ZMAZANA, Utilities.formatDate(new Date(), 'Europe/Bratislava', 'd.M.yyyy')]]);
+    }
+  } catch (err) {
+    console.error('Uvoľnenie adresy po zmazaní recenzie zlyhalo:', err);
+  }
+}
+
 // Doplní evidenciu o to, čo vzniklo pred zavedením pravidla: existujúce recenzie a už odoslané prosby. Beží pri
 // otvorení tabuľky, opakované spustenie nič nezmení.
 function rebuildReviewAddressIndex_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const emailPodlaId = {};
   const poslane = [];
+  const zmazane = readReviewAddresses_();
   const rez = ss.getSheetByName(SHEET_NAME);
   if (rez && rez.getLastRow() > 1) {
     rez.getRange(2, 1, rez.getLastRow() - 1, Math.max(REVIEW_STLPEC_MAILU, 8)).getDisplayValues().forEach(function(r) {
       if (r[7]) emailPodlaId[r[7]] = r[5];
-      if (r[REVIEW_STLPEC_MAILU - 1] === 'POSLANÉ') poslane.push(r[5]);
+      if (r[REVIEW_STLPEC_MAILU - 1] === 'POSLANÉ' && !(r[7] && zmazane[visitKey_(r[7])])) poslane.push(r[5]); // zmazaná recenzia adresu neblokuje
     });
   }
   const arch = ss.getSheetByName(SHEET_ARCHIV);
@@ -1786,6 +1828,7 @@ function submitReview(payload) {
       const rez = findReservationForReview_(id);
       if (!rez) return { ok: false, error: REVIEW_CHYBY.nenajdene };
       if (rez.chyba) return { ok: false, error: REVIEW_CHYBY[rez.chyba] };
+      if (visitReviewDeleted_(id)) return { ok: false, error: REVIEW_CHYBY.zmazana };
       if (reviewExists_(id) || emailHasReview_(rez.email)) return { ok: false, error: REVIEW_CHYBY.existuje };
       rezInfo = rez;
 
@@ -2061,6 +2104,7 @@ function doDeleteReview_(id, token) {
     if (!r) return reviewAdminPage_('Recenzia sa nenašla', '<p>Recenzia už neexistuje.</p>');
     deleteReviewPhotos_(r.raw);
     getReviewSheet_().deleteRow(r.row);
+    releaseReviewAddress_(id);
     invalidatePublicCache_();
   } finally {
     lock.releaseLock();
