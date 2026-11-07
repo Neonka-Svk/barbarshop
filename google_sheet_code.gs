@@ -1405,7 +1405,9 @@ function reviewApprovalUrl_(id) {
 
 function setReviewLink_(sheet, row, id) {
   try {
-    sheet.getRange(row, RECENZIE_STLPEC_ODKAZ).setFormula('=HYPERLINK("' + reviewApprovalUrl_(id) + '","Otvoriť schvaľovanie")');
+    // Odkaz ako formátovaný text (nie vzorec HYPERLINK): vzorec zlyhával podľa jazykového nastavenia tabuľky (#ERROR!).
+    const odkaz = SpreadsheetApp.newRichTextValue().setText('Otvoriť schvaľovanie').setLinkUrl(reviewApprovalUrl_(id)).build();
+    sheet.getRange(row, RECENZIE_STLPEC_ODKAZ).setRichTextValue(odkaz);
   } catch (err) {
     console.error('Odkaz na schvaľovanie sa nepodarilo zapísať:', err);
   }
@@ -1430,10 +1432,11 @@ function backfillReviewLinks_(sheet) {
   const n = sheet.getLastRow() - 1;
   if (n > 0) {
     const ids = sheet.getRange(2, 1, n, 1).getValues();
-    const odkazy = sheet.getRange(2, RECENZIE_STLPEC_ODKAZ, n, 1).getFormulas();
+    const odkazy = sheet.getRange(2, RECENZIE_STLPEC_ODKAZ, n, 1).getRichTextValues();
     for (let i = 0; i < n; i++) {
       const id = String(ids[i][0] || '');
-      if (id && !odkazy[i][0] && UUID_REGEX.test(id)) setReviewLink_(sheet, i + 2, id);
+      // chýbajúci alebo pokazený odkaz (aj starý vzorec s #ERROR!) sa nahradí
+      if (id && UUID_REGEX.test(id) && !(odkazy[i][0] && odkazy[i][0].getLinkUrl())) setReviewLink_(sheet, i + 2, id);
     }
   }
 }
