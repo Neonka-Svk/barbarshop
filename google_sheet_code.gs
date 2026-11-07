@@ -1363,11 +1363,12 @@ function processCancellations(cancellations, nonce) {
 // odklikne (stĺpec "Schválené") -> riadok sa objaví na webe (?action=reviews).
 // Jedna rezervácia = najviac jedna recenzia; rezervácia sa hľadá v "Rezervácie" aj v "Archív".
 const SHEET_RECENZIE = 'Recenzie';
-const RECENZIE_HLAVICKA = ['Identifikátor rezervácie', 'Dátum strihania', 'Hodnotenie (1-5)', 'Recenzia', 'Zobrazené meno', 'Odoslané (súhlas so zverejnením)', 'Schválené', 'Odpoveď holiča', 'Zmazať recenziu?', 'Fotky (ID súborov)', 'Priečinok s fotkami'];
+const RECENZIE_HLAVICKA = ['Identifikátor rezervácie', 'Dátum strihania', 'Hodnotenie (1-5)', 'Recenzia', 'Zobrazené meno', 'Odoslané (súhlas so zverejnením)', 'Schválené', 'Odpoveď holiča', 'Zmazať recenziu?', 'Fotky (ID súborov)', 'Priečinok s fotkami', 'Schvaľovanie (odkaz)'];
 const RECENZIE_STLPEC_SCHVALENE = 7;
 const RECENZIE_STLPEC_ZMAZAT = 9;
 const RECENZIE_STLPEC_FOTKY = 10;
 const RECENZIE_STLPEC_PRIECINOK = 11;
+const RECENZIE_STLPEC_ODKAZ = 12; // klikateľný odkaz na stránku schvaľovania (fotky, odstránenie, odpoveď), nahrádza hľadanie mailu
 const REVIEW_PLATNOST_DNI = 30;
 const REVIEW_MAX_ZOBRAZENYCH = 12;
 const REVIEW_STLPEC_MAILU = 10; // J v hárku Rezervácie: označí, že mail s recenziou už odišiel
@@ -1397,6 +1398,19 @@ function getReviewSheet_() {
 }
 
 // Starší hárok "Recenzie" sa sám doplní o nové stĺpce (hlavička, a pri "Zmazať recenziu?" aj checkboxy).
+// Odkaz na stránku schvaľovania (rovnaká ako v maile): zákazník ho nevidí, hárok vidí len holič. Podpísaný, ako v maile.
+function reviewApprovalUrl_(id) {
+  return getWebAppUrl_() + '?action=approveReview&id=' + id + '&t=' + reviewApprovalToken_(id);
+}
+
+function setReviewLink_(sheet, row, id) {
+  try {
+    sheet.getRange(row, RECENZIE_STLPEC_ODKAZ).setFormula('=HYPERLINK("' + reviewApprovalUrl_(id) + '","Otvoriť schvaľovanie")');
+  } catch (err) {
+    console.error('Odkaz na schvaľovanie sa nepodarilo zapísať:', err);
+  }
+}
+
 function upgradeReviewSheet_(sheet) {
   if (!sheet.getRange(1, RECENZIE_STLPEC_ZMAZAT).getValue()) {
     sheet.getRange(1, RECENZIE_STLPEC_ZMAZAT).setValue(RECENZIE_HLAVICKA[RECENZIE_STLPEC_ZMAZAT - 1]);
@@ -1407,6 +1421,19 @@ function upgradeReviewSheet_(sheet) {
     if (!sheet.getRange(1, c).getValue()) {
       sheet.getRange(1, c).setValue(RECENZIE_HLAVICKA[c - 1]);
       sheet.getRange(1, RECENZIE_STLPEC_ZMAZAT - 1).copyFormatToRange(sheet, c, c, 1, 1);
+    }
+  }
+}
+
+// Staršie recenzie dostanú odkaz na schvaľovanie dodatočne (len tam, kde ešte chýba). Beží pri otvorení tabuľky.
+function backfillReviewLinks_(sheet) {
+  const n = sheet.getLastRow() - 1;
+  if (n > 0) {
+    const ids = sheet.getRange(2, 1, n, 1).getValues();
+    const odkazy = sheet.getRange(2, RECENZIE_STLPEC_ODKAZ, n, 1).getFormulas();
+    for (let i = 0; i < n; i++) {
+      const id = String(ids[i][0] || '');
+      if (id && !odkazy[i][0] && UUID_REGEX.test(id)) setReviewLink_(sheet, i + 2, id);
     }
   }
 }
@@ -1672,6 +1699,7 @@ function submitReview(payload) {
         '',
         false,
         '',
+        '',
         ''
       ];
       // Najnovšia recenzia hore (hneď pod hlavičkou), nech si na nové a neodpovedané nezabudneš.
@@ -1687,6 +1715,7 @@ function submitReview(payload) {
       }
       sheet.getRange(cielovyRiadok, RECENZIE_STLPEC_SCHVALENE).insertCheckboxes();
       sheet.getRange(cielovyRiadok, RECENZIE_STLPEC_ZMAZAT).insertCheckboxes();
+      setReviewLink_(sheet, cielovyRiadok, id);
     } finally {
       lock.releaseLock();
     }
@@ -2177,7 +2206,10 @@ function onOpen() {
   // Staršiemu hárku "Recenzie" doplní stĺpec "Zmazať recenziu?" (hlavička + checkboxy).
   try {
     const recenzie = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_RECENZIE);
-    if (recenzie) upgradeReviewSheet_(recenzie);
+    if (recenzie) {
+      upgradeReviewSheet_(recenzie);
+      backfillReviewLinks_(recenzie);
+    }
   } catch (err) {
     console.error('Úprava hárku Recenzie zlyhala:', err);
   }
